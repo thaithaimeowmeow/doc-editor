@@ -1,0 +1,773 @@
+<input #fileInput type="file" hidden accept=".docx,.html,.htm,.txt,application/vnd.openxmlformats-officedocument.wordprocessingml.document" (change)="onFilePicked($event)" />
+<input #imageInput type="file" hidden accept="image/*" (change)="onImagePicked($event)" />
+
+<!-- ===================== Thanh tiêu đề ===================== -->
+<header class="we-titlebar">
+  <div class="we-qat" (mousedown)="keepFocus($event)">
+    <button type="button" class="we-qbtn" title="Lưu (Ctrl+S)" (click)="onSave()"><we-icon name="save" /></button>
+    <button type="button" class="we-qbtn" title="Hoàn tác (Ctrl+Z)" [disabled]="!state()?.canUndo" (click)="exec('undo')"><we-icon name="undo" /></button>
+    <button type="button" class="we-qbtn" title="Làm lại (Ctrl+Y)" [disabled]="!state()?.canRedo" (click)="exec('redo')"><we-icon name="redo" /></button>
+  </div>
+  <input class="we-doc-title" aria-label="Tên tài liệu" [value]="title()" (change)="setTitle($any($event.target).value)" />
+</header>
+
+<!-- ===================== Tab ===================== -->
+<nav class="we-tabs" role="tablist" (mousedown)="keepFocus($event)">
+  <button type="button" role="tab" class="we-tab we-tab-file" [attr.aria-selected]="tab() === 'file'" (click)="selectTab('file')">Tệp</button>
+  <button type="button" role="tab" class="we-tab" [class.active]="tab() === 'home'" [attr.aria-selected]="tab() === 'home'" (click)="selectTab('home')">Trang chủ</button>
+  <button type="button" role="tab" class="we-tab" [class.active]="tab() === 'insert'" [attr.aria-selected]="tab() === 'insert'" (click)="selectTab('insert')">Chèn</button>
+  <button type="button" role="tab" class="we-tab" [class.active]="tab() === 'layout'" [attr.aria-selected]="tab() === 'layout'" (click)="selectTab('layout')">Bố cục</button>
+  <button type="button" role="tab" class="we-tab" [class.active]="tab() === 'view'" [attr.aria-selected]="tab() === 'view'" (click)="selectTab('view')">Xem</button>
+  @if (contextTable()) {
+    <button type="button" role="tab" class="we-tab we-tab-ctx" [class.active]="tab() === 'table'" [attr.aria-selected]="tab() === 'table'" (click)="selectTab('table')">Bảng</button>
+  }
+  @if (contextImage()) {
+    <button type="button" role="tab" class="we-tab we-tab-ctx" [class.active]="tab() === 'image'" [attr.aria-selected]="tab() === 'image'" (click)="selectTab('image')">Ảnh</button>
+  }
+  @if (hfMode()) {
+    <button type="button" role="tab" class="we-tab we-tab-ctx" [class.active]="tab() === 'hf'" [attr.aria-selected]="tab() === 'hf'" (click)="selectTab('hf')">Đầu trang &amp; Chân trang</button>
+  }
+</nav>
+
+<!-- ===================== Ribbon ===================== -->
+@if (tab() !== 'file') {
+  <div class="we-ribbon" role="toolbar" (mousedown)="keepFocus($event)">
+    @switch (tab()) {
+      <!-- ---------- TRANG CHỦ ---------- -->
+      @case ('home') {
+        <div class="we-group">
+          <div class="we-group-body">
+            <div class="we-split we-split-lg we-has-menu">
+              <button type="button" class="we-btn-lg" title="Dán (Ctrl+V)" (click)="paste()"><we-icon name="paste" /><span>Dán</span></button>
+              <button type="button" class="we-arrow" aria-label="Tuỳ chọn dán" (click)="toggleMenu('paste', $event)"><we-icon name="chevron" /></button>
+              @if (menu() === 'paste') {
+                <div class="we-menu">
+                  <button type="button" class="we-mi" (click)="paste()">Giữ định dạng</button>
+                  <button type="button" class="we-mi" (click)="paste(true)">Chỉ giữ chữ</button>
+                </div>
+              }
+            </div>
+            <div class="we-col">
+              <button type="button" class="we-btn we-btn-text" title="Cắt (Ctrl+X)" (click)="copyCut('cut')"><we-icon name="cut" /><span>Cắt</span></button>
+              <button type="button" class="we-btn we-btn-text" title="Sao chép (Ctrl+C)" (click)="copyCut('copy')"><we-icon name="copy" /><span>Sao chép</span></button>
+              <button type="button" class="we-btn we-btn-text" [class.on]="state()?.painter" title="Sao chép định dạng (Ctrl+Shift+C)" (click)="exec('formatPainter')"><we-icon name="painter" /><span>Định dạng</span></button>
+            </div>
+          </div>
+          <div class="we-group-label">Bộ nhớ tạm</div>
+        </div>
+
+        <div class="we-group">
+          <div class="we-group-body we-rows">
+            <div class="we-row">
+              <div class="we-combo we-combo-font we-has-menu">
+                <input aria-label="Phông chữ" [value]="state()?.fontName ?? 'Times New Roman'" (keydown.enter)="applyFont($any($event.target).value)" (focus)="$any($event.target).select()" />
+                <button type="button" class="we-arrow" aria-label="Chọn phông" (click)="toggleMenu('font', $event)"><we-icon name="chevron" /></button>
+                @if (menu() === 'font') {
+                  <div class="we-menu we-menu-scroll">
+                    @for (f of fonts; track f) {
+                      <button type="button" class="we-mi" [class.on]="state()?.fontName === f" [style.font-family]="f" (click)="applyFont(f)">{{ f }}</button>
+                    }
+                  </div>
+                }
+              </div>
+              <div class="we-combo we-combo-size we-has-menu">
+                <input aria-label="Cỡ chữ" [value]="state()?.fontSize ?? 12" (keydown.enter)="applySize($any($event.target).value)" (focus)="$any($event.target).select()" />
+                <button type="button" class="we-arrow" aria-label="Chọn cỡ chữ" (click)="toggleMenu('size', $event)"><we-icon name="chevron" /></button>
+                @if (menu() === 'size') {
+                  <div class="we-menu we-menu-scroll">
+                    @for (s of sizes; track s) {
+                      <button type="button" class="we-mi" [class.on]="state()?.fontSize === s" (click)="applySize(s)">{{ s }}</button>
+                    }
+                  </div>
+                }
+              </div>
+              <button type="button" class="we-btn" title="Tăng cỡ chữ (Ctrl+])" (click)="exec('growFont')"><we-icon name="grow" /></button>
+              <button type="button" class="we-btn" title="Giảm cỡ chữ (Ctrl+[)" (click)="exec('shrinkFont')"><we-icon name="shrink" /></button>
+              <div class="we-has-menu we-rel">
+                <button type="button" class="we-btn" title="Đổi kiểu chữ hoa/thường" (click)="toggleMenu('case', $event)"><we-icon name="case" /></button>
+                @if (menu() === 'case') {
+                  <div class="we-menu">
+                    <button type="button" class="we-mi" (click)="exec('changeCase', 'sentence')">Viết hoa đầu câu.</button>
+                    <button type="button" class="we-mi" (click)="exec('changeCase', 'lower')">chữ thường</button>
+                    <button type="button" class="we-mi" (click)="exec('changeCase', 'upper')">CHỮ HOA</button>
+                    <button type="button" class="we-mi" (click)="exec('changeCase', 'title')">Viết Hoa Mỗi Từ</button>
+                    <button type="button" class="we-mi" (click)="exec('changeCase', 'toggle')">đẢO cHỮ hOA</button>
+                  </div>
+                }
+              </div>
+              <button type="button" class="we-btn" title="Xoá định dạng (Ctrl+Space)" (click)="exec('removeFormat')"><we-icon name="clearFormat" /></button>
+            </div>
+            <div class="we-row">
+              <button type="button" class="we-btn we-glyph" [class.on]="state()?.bold" title="Đậm (Ctrl+B)" (click)="exec('bold')"><b>B</b></button>
+              <button type="button" class="we-btn we-glyph" [class.on]="state()?.italic" title="Nghiêng (Ctrl+I)" (click)="exec('italic')"><i>I</i></button>
+              <button type="button" class="we-btn we-glyph" [class.on]="state()?.underline" title="Gạch chân (Ctrl+U)" (click)="exec('underline')"><u>U</u></button>
+              <button type="button" class="we-btn we-glyph" [class.on]="state()?.strike" title="Gạch ngang" (click)="exec('strikeThrough')"><s>ab</s></button>
+              <button type="button" class="we-btn we-glyph" [class.on]="state()?.sub" title="Chỉ số dưới (Ctrl+=)" (click)="exec('subscript')"><span>x<sub>2</sub></span></button>
+              <button type="button" class="we-btn we-glyph" [class.on]="state()?.sup" title="Chỉ số trên (Ctrl+Shift+=)" (click)="exec('superscript')"><span>x<sup>2</sup></span></button>
+              <span class="we-sep"></span>
+              <div class="we-split we-has-menu" [style.--swatch]="highlightColor()">
+                <button type="button" class="we-btn" title="Màu tô sáng" (click)="setHighlight(highlightColor())"><we-icon name="highlight" /></button>
+                <button type="button" class="we-arrow" aria-label="Chọn màu tô sáng" (click)="toggleMenu('hl', $event)"><we-icon name="chevron" /></button>
+                @if (menu() === 'hl') {
+                  <div class="we-menu we-palette">
+                    <div class="we-swatches we-swatches-5">
+                      @for (c of highlights; track c) {
+                        <button type="button" class="we-sw" [style.background]="hex(c)" [title]="hex(c)" (click)="setHighlight(hex(c))"></button>
+                      }
+                    </div>
+                    <button type="button" class="we-mi" (click)="setHighlight('transparent')">Không màu</button>
+                  </div>
+                }
+              </div>
+              <div class="we-split we-has-menu" [style.--swatch]="fontColor()">
+                <button type="button" class="we-btn" title="Màu chữ" (click)="setFontColor(fontColor())"><we-icon name="fontColor" /></button>
+                <button type="button" class="we-arrow" aria-label="Chọn màu chữ" (click)="toggleMenu('color', $event)"><we-icon name="chevron" /></button>
+                @if (menu() === 'color') {
+                  <div class="we-menu we-palette">
+                    <button type="button" class="we-mi" (click)="setFontColor('#000000')">Tự động</button>
+                    <div class="we-pal-label">Màu chủ đề</div>
+                    <div class="we-swatches">
+                      @for (c of themeTop; track c) {
+                        <button type="button" class="we-sw" [style.background]="hex(c)" [title]="hex(c)" (click)="setFontColor(hex(c))"></button>
+                      }
+                    </div>
+                    <div class="we-swatches we-swatches-tint">
+                      @for (row of themeGrid; track $index) {
+                        @for (c of row; track $index) {
+                          <button type="button" class="we-sw" [style.background]="hex(c)" [title]="hex(c)" (click)="setFontColor(hex(c))"></button>
+                        }
+                      }
+                    </div>
+                    <div class="we-pal-label">Màu chuẩn</div>
+                    <div class="we-swatches">
+                      @for (c of standard; track c) {
+                        <button type="button" class="we-sw" [style.background]="hex(c)" [title]="hex(c)" (click)="setFontColor(hex(c))"></button>
+                      }
+                    </div>
+                    <label class="we-mi we-mi-color">Màu khác… <input type="color" (change)="setFontColor($any($event.target).value)" /></label>
+                  </div>
+                }
+              </div>
+            </div>
+          </div>
+          <div class="we-group-label">Phông chữ</div>
+        </div>
+
+        <div class="we-group">
+          <div class="we-group-body we-rows">
+            <div class="we-row">
+              <div class="we-split we-has-menu">
+                <button type="button" class="we-btn" [class.on]="state()?.list === 'ul'" title="Dấu đầu dòng" (click)="exec('insertUnorderedList')"><we-icon name="bullets" /></button>
+                <button type="button" class="we-arrow" aria-label="Kiểu dấu đầu dòng" (click)="toggleMenu('ul', $event)"><we-icon name="chevron" /></button>
+                @if (menu() === 'ul') {
+                  <div class="we-menu we-menu-grid">
+                    <button type="button" class="we-mi we-list-sample" (click)="exec('insertUnorderedList', 'disc')">●</button>
+                    <button type="button" class="we-mi we-list-sample" (click)="exec('insertUnorderedList', 'circle')">○</button>
+                    <button type="button" class="we-mi we-list-sample" (click)="exec('insertUnorderedList', 'square')">■</button>
+                  </div>
+                }
+              </div>
+              <div class="we-split we-has-menu">
+                <button type="button" class="we-btn" [class.on]="state()?.list === 'ol'" title="Đánh số" (click)="exec('insertOrderedList')"><we-icon name="numbering" /></button>
+                <button type="button" class="we-arrow" aria-label="Kiểu đánh số" (click)="toggleMenu('ol', $event)"><we-icon name="chevron" /></button>
+                @if (menu() === 'ol') {
+                  <div class="we-menu we-menu-grid">
+                    <button type="button" class="we-mi we-list-sample" (click)="exec('insertOrderedList', 'decimal')">1. 2. 3.</button>
+                    <button type="button" class="we-mi we-list-sample" (click)="exec('insertOrderedList', 'lower-alpha')">a. b. c.</button>
+                    <button type="button" class="we-mi we-list-sample" (click)="exec('insertOrderedList', 'upper-alpha')">A. B. C.</button>
+                    <button type="button" class="we-mi we-list-sample" (click)="exec('insertOrderedList', 'lower-roman')">i. ii. iii.</button>
+                    <button type="button" class="we-mi we-list-sample" (click)="exec('insertOrderedList', 'upper-roman')">I. II. III.</button>
+                  </div>
+                }
+              </div>
+              <button type="button" class="we-btn" title="Giảm thụt lề (Ctrl+Shift+M)" (click)="exec('outdent')"><we-icon name="outdent" /></button>
+              <button type="button" class="we-btn" title="Tăng thụt lề (Ctrl+M)" (click)="exec('indent')"><we-icon name="indent" /></button>
+              <span class="we-sep"></span>
+              <button type="button" class="we-btn" [class.on]="marks()" title="Hiện ký tự định dạng ¶" (click)="toggleMarks()"><we-icon name="marks" /></button>
+            </div>
+            <div class="we-row">
+              <button type="button" class="we-btn" [class.on]="state()?.align === 'left'" title="Căn trái (Ctrl+L)" (click)="exec('align', 'left')"><we-icon name="alignLeft" /></button>
+              <button type="button" class="we-btn" [class.on]="state()?.align === 'center'" title="Căn giữa (Ctrl+E)" (click)="exec('align', 'center')"><we-icon name="alignCenter" /></button>
+              <button type="button" class="we-btn" [class.on]="state()?.align === 'right'" title="Căn phải (Ctrl+R)" (click)="exec('align', 'right')"><we-icon name="alignRight" /></button>
+              <button type="button" class="we-btn" [class.on]="state()?.align === 'justify'" title="Căn đều hai bên (Ctrl+J)" (click)="exec('align', 'justify')"><we-icon name="alignJustify" /></button>
+              <div class="we-has-menu we-rel">
+                <button type="button" class="we-btn" title="Giãn dòng và đoạn" (click)="toggleMenu('spacing', $event)"><we-icon name="lineSpacing" /></button>
+                @if (menu() === 'spacing') {
+                  <div class="we-menu">
+                    @for (lh of ['1', '1.15', '1.5', '2', '2.5', '3']; track lh) {
+                      <button type="button" class="we-mi" [class.on]="state()?.lineHeight === lh" (click)="exec('lineHeight', lh)">{{ lh.replace('.', ',') }}</button>
+                    }
+                    <div class="we-mi-sep"></div>
+                    <button type="button" class="we-mi" (click)="exec('spaceBefore', 12)">Thêm khoảng trước đoạn</button>
+                    <button type="button" class="we-mi" (click)="exec('spaceBefore', 0)">Bỏ khoảng trước đoạn</button>
+                    <button type="button" class="we-mi" (click)="exec('spaceAfter', 8)">Thêm khoảng sau đoạn</button>
+                    <button type="button" class="we-mi" (click)="exec('spaceAfter', 0)">Bỏ khoảng sau đoạn</button>
+                  </div>
+                }
+              </div>
+              <div class="we-split we-has-menu" [style.--swatch]="shadingColor()">
+                <button type="button" class="we-btn" title="Tô nền đoạn" (click)="setShading(shadingColor())"><we-icon name="shading" /></button>
+                <button type="button" class="we-arrow" aria-label="Chọn màu nền đoạn" (click)="toggleMenu('shade', $event)"><we-icon name="chevron" /></button>
+                @if (menu() === 'shade') {
+                  <div class="we-menu we-palette">
+                    <div class="we-swatches">
+                      @for (c of themeTop; track c) {
+                        <button type="button" class="we-sw" [style.background]="hex(c)" (click)="setShading(hex(c))"></button>
+                      }
+                    </div>
+                    <div class="we-swatches we-swatches-tint">
+                      @for (row of themeGrid; track $index) {
+                        @for (c of row; track $index) {
+                          <button type="button" class="we-sw" [style.background]="hex(c)" (click)="setShading(hex(c))"></button>
+                        }
+                      }
+                    </div>
+                    <button type="button" class="we-mi" (click)="setShading('transparent')">Không màu</button>
+                  </div>
+                }
+              </div>
+            </div>
+          </div>
+          <div class="we-group-label">Đoạn văn</div>
+        </div>
+
+        <div class="we-group we-group-styles">
+          <div class="we-group-body">
+            <div class="we-gallery">
+              @for (s of styles; track s.key) {
+                <button type="button" class="we-style" [class.on]="state()?.block === s.key" (click)="exec('block', s.key)">
+                  <span class="we-style-sample" [class]="s.cls">AaBbCc</span>
+                  <span class="we-style-name">{{ s.label }}</span>
+                </button>
+              }
+            </div>
+          </div>
+          <div class="we-group-label">Kiểu</div>
+        </div>
+
+        <div class="we-group we-ro-ok">
+          <div class="we-group-body we-col">
+            <button type="button" class="we-btn we-btn-text" title="Tìm (Ctrl+F)" (click)="openFind()"><we-icon name="find" /><span>Tìm</span></button>
+            <button type="button" class="we-btn we-btn-text" title="Thay thế (Ctrl+H)" (click)="openFind(true)"><we-icon name="replace" /><span>Thay thế</span></button>
+            <button type="button" class="we-btn we-btn-text" title="Chọn tất cả (Ctrl+A)" (click)="exec('selectAll')"><we-icon name="select" /><span>Chọn tất cả</span></button>
+          </div>
+          <div class="we-group-label">Chỉnh sửa</div>
+        </div>
+      }
+
+      <!-- ---------- CHÈN ---------- -->
+      @case ('insert') {
+        <div class="we-group">
+          <div class="we-group-body">
+            <button type="button" class="we-btn-lg" title="Ngắt trang (Ctrl+Enter)" (click)="exec('insertPageBreak')"><we-icon name="pageBreak" /><span>Ngắt trang</span></button>
+          </div>
+          <div class="we-group-label">Trang</div>
+        </div>
+        <div class="we-group">
+          <div class="we-group-body we-has-menu we-rel">
+            <button type="button" class="we-btn-lg" (click)="toggleMenu('table', $event)"><we-icon name="table" /><span>Bảng ▾</span></button>
+            @if (menu() === 'table') {
+              <div class="we-menu we-table-picker" (mouseleave)="gridHover.set([0, 0])">
+                <div class="we-pal-label">
+                  @if (gridHover()[0]) { Bảng {{ gridHover()[1] }} × {{ gridHover()[0] }} } @else { Chèn bảng }
+                </div>
+                <div class="we-grid">
+                  @for (r of gridRows; track r) {
+                    @for (c of gridCols; track c) {
+                      <button
+                        type="button"
+                        class="we-cell"
+                        [class.on]="r < gridHover()[0] && c < gridHover()[1]"
+                        [attr.aria-label]="'Bảng ' + (c + 1) + ' cột ' + (r + 1) + ' hàng'"
+                        (mouseenter)="gridHover.set([r + 1, c + 1])"
+                        (click)="insertTable(r + 1, c + 1)"
+                      ></button>
+                    }
+                  }
+                </div>
+                <div class="we-mi-sep"></div>
+                <button type="button" class="we-mi" (click)="menu.set(null); dialog.set('table')">Chèn bảng…</button>
+              </div>
+            }
+          </div>
+          <div class="we-group-label">Bảng</div>
+        </div>
+        <div class="we-group">
+          <div class="we-group-body">
+            <button type="button" class="we-btn-lg" title="Chèn ảnh từ máy" (click)="pickImage()"><we-icon name="image" /><span>Ảnh</span></button>
+            <div class="we-col">
+              <button type="button" class="we-btn we-btn-text" (click)="imageUrl.set(''); dialog.set('imageUrl')"><we-icon name="link" /><span>Ảnh từ URL</span></button>
+              <button type="button" class="we-btn we-btn-text" (click)="exec('insertHr')"><we-icon name="hr" /><span>Đường kẻ ngang</span></button>
+            </div>
+          </div>
+          <div class="we-group-label">Minh hoạ</div>
+        </div>
+        <div class="we-group">
+          <div class="we-group-body">
+            <button type="button" class="we-btn-lg" title="Liên kết (Ctrl+K)" (click)="openLinkDialog()"><we-icon name="link" /><span>Liên kết</span></button>
+            <button type="button" class="we-btn-lg" [disabled]="!state()?.inLink" (click)="exec('unlink')"><we-icon name="unlink" /><span>Bỏ liên kết</span></button>
+          </div>
+          <div class="we-group-label">Liên kết</div>
+        </div>
+        <div class="we-group">
+          <div class="we-group-body">
+            <button type="button" class="we-btn-lg" (click)="exec('editHeader')"><we-icon name="header" /><span>Đầu trang</span></button>
+            <button type="button" class="we-btn-lg" (click)="exec('editFooter')"><we-icon name="footer" /><span>Chân trang</span></button>
+            <div class="we-has-menu we-rel">
+              <button type="button" class="we-btn-lg" (click)="toggleMenu('pgnum', $event)"><we-icon name="pageNumber" /><span>Số trang ▾</span></button>
+              @if (menu() === 'pgnum') {
+                <ng-container *ngTemplateOutlet="pageNumberMenu" />
+              }
+            </div>
+          </div>
+          <div class="we-group-label">Đầu trang &amp; Chân trang</div>
+        </div>
+        <div class="we-group">
+          <div class="we-group-body">
+            <div class="we-has-menu we-rel">
+              <button type="button" class="we-btn-lg" (click)="toggleMenu('symbol', $event)"><we-icon name="symbol" /><span>Ký hiệu ▾</span></button>
+              @if (menu() === 'symbol') {
+                <div class="we-menu we-symbols">
+                  @for (s of symbols; track $index) {
+                    <button type="button" class="we-sym" (click)="exec('insertSymbol', s)">{{ s }}</button>
+                  }
+                </div>
+              }
+            </div>
+            <button type="button" class="we-btn-lg" (click)="exec('insertDate')"><we-icon name="date" /><span>Ngày</span></button>
+          </div>
+          <div class="we-group-label">Ký hiệu</div>
+        </div>
+      }
+
+      <!-- ---------- BỐ CỤC ---------- -->
+      @case ('layout') {
+        <div class="we-group">
+          <div class="we-group-body">
+            <div class="we-has-menu we-rel">
+              <button type="button" class="we-btn-lg" (click)="toggleMenu('margins', $event)"><we-icon name="margins" /><span>Lề ▾</span></button>
+              @if (menu() === 'margins') {
+                <div class="we-menu">
+                  @for (m of marginPresets; track m[0]) {
+                    <button type="button" class="we-mi" (click)="setMarginPreset(m[0])">{{ m[1].label }}</button>
+                  }
+                  <div class="we-mi-sep"></div>
+                  <button type="button" class="we-mi" (click)="openMargins()">Tuỳ chỉnh lề…</button>
+                </div>
+              }
+            </div>
+            <div class="we-has-menu we-rel">
+              <button type="button" class="we-btn-lg" (click)="toggleMenu('orient', $event)"><we-icon name="orientation" /><span>Hướng ▾</span></button>
+              @if (menu() === 'orient') {
+                <div class="we-menu">
+                  <button type="button" class="we-mi" [class.on]="!landscape()" (click)="setOrientation(false)">Dọc</button>
+                  <button type="button" class="we-mi" [class.on]="landscape()" (click)="setOrientation(true)">Ngang</button>
+                </div>
+              }
+            </div>
+            <div class="we-has-menu we-rel">
+              <button type="button" class="we-btn-lg" (click)="toggleMenu('paper', $event)"><we-icon name="size" /><span>Khổ giấy ▾</span></button>
+              @if (menu() === 'paper') {
+                <div class="we-menu">
+                  @for (s of paperSizes; track s[0]) {
+                    <button type="button" class="we-mi" [class.on]="paperKey() === s[0]" (click)="setPaper(s[0])">{{ s[1].label }}</button>
+                  }
+                </div>
+              }
+            </div>
+            <button type="button" class="we-btn-lg" (click)="exec('insertPageBreak')"><we-icon name="pageBreak" /><span>Ngắt trang</span></button>
+          </div>
+          <div class="we-group-label">Thiết lập trang</div>
+        </div>
+        <div class="we-group">
+          <div class="we-group-body we-rows">
+            <div class="we-row we-field-row">
+              <we-icon name="indent" />
+              <label>Thụt trái <input type="number" step="0.25" min="0" [value]="((state()?.indentLeft ?? 0) / 37.795).toFixed(2)" (change)="exec('paragraphIndent', { left: $any($event.target).valueAsNumber * 37.795 })" /> cm</label>
+            </div>
+            <div class="we-row we-field-row">
+              <we-icon name="outdent" />
+              <label>Thụt phải <input type="number" step="0.25" min="0" [value]="((state()?.indentRight ?? 0) / 37.795).toFixed(2)" (change)="exec('paragraphIndent', { right: $any($event.target).valueAsNumber * 37.795 })" /> cm</label>
+            </div>
+          </div>
+          <div class="we-group-label">Thụt lề</div>
+        </div>
+        <div class="we-group">
+          <div class="we-group-body we-rows">
+            <div class="we-row we-field-row">
+              <we-icon name="spaceBefore" />
+              <label>Trước <input type="number" step="6" min="0" value="0" (change)="exec('spaceBefore', $any($event.target).valueAsNumber)" /> pt</label>
+            </div>
+            <div class="we-row we-field-row">
+              <we-icon name="spaceAfter" />
+              <label>Sau <input type="number" step="6" min="0" value="0" (change)="exec('spaceAfter', $any($event.target).valueAsNumber)" /> pt</label>
+            </div>
+          </div>
+          <div class="we-group-label">Khoảng cách đoạn</div>
+        </div>
+      }
+
+      <!-- ---------- XEM ---------- -->
+      @case ('view') {
+        <div class="we-group we-ro-ok">
+          <div class="we-group-body">
+            <button type="button" class="we-btn-lg" [class.on]="view() === 'print'" (click)="setView('print')"><we-icon name="printLayout" /><span>Bố cục in</span></button>
+            <button type="button" class="we-btn-lg" [class.on]="view() === 'web'" (click)="setView('web')"><we-icon name="webLayout" /><span>Bố cục web</span></button>
+          </div>
+          <div class="we-group-label">Chế độ xem</div>
+        </div>
+        <div class="we-group we-ro-ok">
+          <div class="we-group-body we-col">
+            <label class="we-check"><input type="checkbox" [checked]="rulerOn()" (change)="rulerOn.set($any($event.target).checked)" /> Thước kẻ</label>
+            <label class="we-check"><input type="checkbox" [checked]="gridlines()" (change)="toggleGridlines()" /> Đường lưới bảng</label>
+            <label class="we-check"><input type="checkbox" [checked]="marks()" (change)="toggleMarks()" /> Ký tự định dạng</label>
+          </div>
+          <div class="we-group-label">Hiển thị</div>
+        </div>
+        <div class="we-group we-ro-ok">
+          <div class="we-group-body">
+            <button type="button" class="we-btn-lg" (click)="setZoom(1)"><we-icon name="zoom100" /><span>100%</span></button>
+            <button type="button" class="we-btn-lg" (click)="setZoom('page')"><we-icon name="onePage" /><span>Một trang</span></button>
+            <button type="button" class="we-btn-lg" (click)="setZoom('width')"><we-icon name="pageWidth" /><span>Vừa chiều rộng</span></button>
+            <div class="we-col">
+              <button type="button" class="we-btn we-btn-text" (click)="setZoom(zoom() + 0.1)"><we-icon name="zoomIn" /><span>Phóng to</span></button>
+              <button type="button" class="we-btn we-btn-text" (click)="setZoom(zoom() - 0.1)"><we-icon name="zoomOut" /><span>Thu nhỏ</span></button>
+            </div>
+          </div>
+          <div class="we-group-label">Thu phóng</div>
+        </div>
+      }
+
+      <!-- ---------- BẢNG (ngữ cảnh) ---------- -->
+      @case ('table') {
+        <div class="we-group">
+          <div class="we-group-body">
+            <div class="we-col">
+              <button type="button" class="we-btn we-btn-text" (click)="exec('rowAbove')"><we-icon name="rowAbove" /><span>Chèn hàng trên</span></button>
+              <button type="button" class="we-btn we-btn-text" (click)="exec('rowBelow')"><we-icon name="rowBelow" /><span>Chèn hàng dưới</span></button>
+            </div>
+            <div class="we-col">
+              <button type="button" class="we-btn we-btn-text" (click)="exec('colLeft')"><we-icon name="colLeft" /><span>Chèn cột trái</span></button>
+              <button type="button" class="we-btn we-btn-text" (click)="exec('colRight')"><we-icon name="colRight" /><span>Chèn cột phải</span></button>
+            </div>
+          </div>
+          <div class="we-group-label">Hàng &amp; Cột</div>
+        </div>
+        <div class="we-group">
+          <div class="we-group-body we-col">
+            <button type="button" class="we-btn we-btn-text" (click)="exec('deleteRow')"><we-icon name="deleteRow" /><span>Xoá hàng</span></button>
+            <button type="button" class="we-btn we-btn-text" (click)="exec('deleteCol')"><we-icon name="deleteCol" /><span>Xoá cột</span></button>
+            <button type="button" class="we-btn we-btn-text" (click)="exec('deleteTable')"><we-icon name="deleteTable" /><span>Xoá bảng</span></button>
+          </div>
+          <div class="we-group-label">Xoá</div>
+        </div>
+        <div class="we-group">
+          <div class="we-group-body">
+            <button type="button" class="we-btn-lg" [disabled]="(state()?.cellsSelected ?? 0) < 2" title="Kéo chuột qua nhiều ô để chọn" (click)="exec('mergeCells')"><we-icon name="merge" /><span>Gộp ô</span></button>
+            <button type="button" class="we-btn-lg" (click)="exec('splitCell')"><we-icon name="split" /><span>Tách ô</span></button>
+            <button type="button" class="we-btn-lg" (click)="exec('distributeCols')"><we-icon name="distribute" /><span>Chia đều cột</span></button>
+          </div>
+          <div class="we-group-label">Gộp</div>
+        </div>
+        <div class="we-group">
+          <div class="we-group-body we-rows">
+            <div class="we-row">
+              <div class="we-split we-has-menu" [style.--swatch]="shadingColor()">
+                <button type="button" class="we-btn" title="Tô nền ô" (click)="setShading(shadingColor(), true)"><we-icon name="shading" /></button>
+                <button type="button" class="we-arrow" aria-label="Chọn màu nền ô" (click)="toggleMenu('cellshade', $event)"><we-icon name="chevron" /></button>
+                @if (menu() === 'cellshade') {
+                  <div class="we-menu we-palette">
+                    <div class="we-swatches">
+                      @for (c of themeTop; track c) {
+                        <button type="button" class="we-sw" [style.background]="hex(c)" (click)="setShading(hex(c), true)"></button>
+                      }
+                    </div>
+                    <div class="we-swatches we-swatches-tint">
+                      @for (row of themeGrid; track $index) {
+                        @for (c of row; track $index) {
+                          <button type="button" class="we-sw" [style.background]="hex(c)" (click)="setShading(hex(c), true)"></button>
+                        }
+                      }
+                    </div>
+                    <button type="button" class="we-mi" (click)="setShading('transparent', true)">Không màu</button>
+                  </div>
+                }
+              </div>
+              <button type="button" class="we-btn" title="Tất cả viền" (click)="exec('tableBorders', 'all')"><we-icon name="bordersAll" /></button>
+              <button type="button" class="we-btn" title="Viền ngoài" (click)="exec('tableBorders', 'outside')"><we-icon name="bordersOutside" /></button>
+              <button type="button" class="we-btn" title="Viền trong" (click)="exec('tableBorders', 'inside')"><we-icon name="bordersInside" /></button>
+              <button type="button" class="we-btn" title="Không viền" (click)="exec('tableBorders', 'none')"><we-icon name="bordersNone" /></button>
+            </div>
+            <div class="we-row">
+              <button type="button" class="we-btn" title="Căn trên" (click)="exec('cellVAlign', 'top')"><we-icon name="vTop" /></button>
+              <button type="button" class="we-btn" title="Căn giữa theo chiều dọc" (click)="exec('cellVAlign', 'middle')"><we-icon name="vMiddle" /></button>
+              <button type="button" class="we-btn" title="Căn dưới" (click)="exec('cellVAlign', 'bottom')"><we-icon name="vBottom" /></button>
+              <button type="button" class="we-btn" title="Hàng tiêu đề in đậm" (click)="exec('tableHeaderRow')"><we-icon name="headerRow" /></button>
+              <button type="button" class="we-btn" [class.on]="gridlines()" title="Hiện đường lưới" (click)="toggleGridlines()"><we-icon name="gridlines" /></button>
+            </div>
+          </div>
+          <div class="we-group-label">Kiểu bảng</div>
+        </div>
+      }
+
+      <!-- ---------- ẢNH (ngữ cảnh) ---------- -->
+      @case ('image') {
+        <div class="we-group">
+          <div class="we-group-body">
+            <button type="button" class="we-btn-lg" (click)="exec('imageWidth', 25)"><we-icon name="imgSmall" /><span>25%</span></button>
+            <button type="button" class="we-btn-lg" (click)="exec('imageWidth', 50)"><we-icon name="imgMedium" /><span>50%</span></button>
+            <button type="button" class="we-btn-lg" (click)="exec('imageWidth', 100)"><we-icon name="imgLarge" /><span>Vừa trang</span></button>
+          </div>
+          <div class="we-group-label">Kích thước</div>
+        </div>
+        <div class="we-group">
+          <div class="we-group-body">
+            <button type="button" class="we-btn-lg" (click)="exec('align', 'left')"><we-icon name="alignLeft" /><span>Trái</span></button>
+            <button type="button" class="we-btn-lg" (click)="exec('align', 'center')"><we-icon name="alignCenter" /><span>Giữa</span></button>
+            <button type="button" class="we-btn-lg" (click)="exec('align', 'right')"><we-icon name="alignRight" /><span>Phải</span></button>
+          </div>
+          <div class="we-group-label">Căn chỉnh</div>
+        </div>
+        <div class="we-group">
+          <div class="we-group-body">
+            <button type="button" class="we-btn-lg" (click)="openAlt()"><we-icon name="alt" /><span>Văn bản thay thế</span></button>
+            <button type="button" class="we-btn-lg" (click)="exec('deleteImage')"><we-icon name="trash" /><span>Xoá ảnh</span></button>
+          </div>
+          <div class="we-group-label">Khác</div>
+        </div>
+      }
+
+      <!-- ---------- ĐẦU TRANG & CHÂN TRANG (ngữ cảnh) ---------- -->
+      @case ('hf') {
+        <div class="we-group">
+          <div class="we-group-body">
+            <div class="we-has-menu we-rel">
+              <button type="button" class="we-btn-lg" (click)="toggleMenu('pgnum', $event)"><we-icon name="pageNumber" /><span>Số trang ▾</span></button>
+              @if (menu() === 'pgnum') {
+                <ng-container *ngTemplateOutlet="pageNumberMenu" />
+              }
+            </div>
+            <div class="we-col">
+              <button type="button" class="we-btn we-btn-text" (click)="exec('insertField', 'page')"><we-icon name="pageNumber" /><span>Chèn số trang</span></button>
+              <button type="button" class="we-btn we-btn-text" (click)="exec('insertField', 'pages')"><we-icon name="pageNumber" /><span>Chèn tổng số trang</span></button>
+              <button type="button" class="we-btn we-btn-text" (click)="exec('insertDate')"><we-icon name="date" /><span>Ngày</span></button>
+            </div>
+          </div>
+          <div class="we-group-label">Chèn</div>
+        </div>
+        <div class="we-group">
+          <div class="we-group-body we-col">
+            <label class="we-check"><input type="checkbox" [checked]="differentFirst()" (change)="setDifferentFirst($any($event.target).checked)" /> Trang đầu khác</label>
+            <button type="button" class="we-btn we-btn-text" (click)="exec(hfMode()?.kind === 'header' ? 'editFooter' : 'editHeader')">
+              <we-icon [name]="hfMode()?.kind === 'header' ? 'footer' : 'header'" />
+              <span>{{ hfMode()?.kind === 'header' ? 'Tới chân trang' : 'Tới đầu trang' }}</span>
+            </button>
+            <button type="button" class="we-btn we-btn-text" (click)="exec('removeHeaderFooter', hfMode()?.kind)"><we-icon name="trash" /><span>Xoá {{ hfMode()?.kind === 'header' ? 'đầu trang' : 'chân trang' }}</span></button>
+          </div>
+          <div class="we-group-label">Tuỳ chọn</div>
+        </div>
+        <div class="we-group">
+          <div class="we-group-body">
+            <button type="button" class="we-btn-lg we-btn-close" (click)="exec('closeHeaderFooter')"><we-icon name="close" /><span>Đóng đầu &amp; chân trang</span></button>
+          </div>
+          <div class="we-group-label">Đóng</div>
+        </div>
+      }
+    }
+  </div>
+}
+
+<ng-template #pageNumberMenu>
+  <div class="we-menu">
+    <div class="we-pal-label">Đầu trang</div>
+    <button type="button" class="we-mi" (click)="pageNumber('header', 'left', 'n')">Số trang – trái</button>
+    <button type="button" class="we-mi" (click)="pageNumber('header', 'center', 'n')">Số trang – giữa</button>
+    <button type="button" class="we-mi" (click)="pageNumber('header', 'right', 'n')">Số trang – phải</button>
+    <div class="we-pal-label">Cuối trang</div>
+    <button type="button" class="we-mi" (click)="pageNumber('footer', 'center', 'n')">Số trang – giữa</button>
+    <button type="button" class="we-mi" (click)="pageNumber('footer', 'right', 'n')">Số trang – phải</button>
+    <button type="button" class="we-mi" (click)="pageNumber('footer', 'center', 'trang')">"Trang 1" – giữa</button>
+    <button type="button" class="we-mi" (click)="pageNumber('footer', 'center', 'page-of')">"Trang 1 / 5" – giữa</button>
+    <button type="button" class="we-mi" (click)="pageNumber('footer', 'right', 'n-of')">"1 / 5" – phải</button>
+  </div>
+</ng-template>
+
+<!-- ===================== Backstage (Tệp) ===================== -->
+@if (tab() === 'file') {
+  <div class="we-backstage">
+    <nav class="we-bs-nav">
+      <button type="button" class="we-bs-back" (click)="selectTab('home')"><we-icon name="undo" /> Quay lại</button>
+      <button type="button" class="we-bs-item" (click)="newDocument()"><we-icon name="newDoc" /> Mới</button>
+      <button type="button" class="we-bs-item" (click)="openFilePicker()"><we-icon name="open" /> Mở…</button>
+      <button type="button" class="we-bs-item" (click)="onSave()"><we-icon name="save" /> Lưu (.docx)</button>
+      <button type="button" class="we-bs-item" (click)="downloadHtml()"><we-icon name="html" /> Tải về HTML</button>
+      <button type="button" class="we-bs-item" (click)="selectTab('home'); print()"><we-icon name="print" /> In</button>
+      <button type="button" class="we-bs-item" (click)="selectTab('home'); print()"><we-icon name="pdf" /> Xuất PDF</button>
+    </nav>
+    <section class="we-bs-main">
+      <h2>Thông tin</h2>
+      <label class="we-bs-field">Tên tài liệu <input [value]="title()" (change)="setTitle($any($event.target).value)" /></label>
+      <dl class="we-bs-props">
+        <dt>Số trang</dt><dd>{{ layout().pages }}</dd>
+        <dt>Số từ</dt><dd>{{ layout().words }}</dd>
+        <dt>Số ký tự (không tính khoảng trắng)</dt><dd>{{ layout().chars }}</dd>
+        <dt>Khổ giấy</dt><dd>{{ paperKey() || 'Tuỳ chỉnh' }} – {{ landscape() ? 'Ngang' : 'Dọc' }}</dd>
+      </dl>
+      <p class="we-bs-hint">Mở được .docx, .html, .txt. "Xuất PDF": chọn "Lưu dưới dạng PDF" trong hộp thoại in.</p>
+    </section>
+  </div>
+}
+
+<div class="we-work">
+<!-- ===================== Thước kẻ ===================== -->
+@if (rulerOn() && view() === 'print' && tab() !== 'file') {
+  <div class="we-ruler-bar" aria-hidden="true">
+    <div class="we-ruler" [style.width.px]="ruler().width" [style.transform]="'translateX(' + rulerLeft() + 'px)'">
+      <div class="we-ruler-margin" [style.width.px]="ruler().left" (mousedown)="startRulerDrag($event, 'marginLeft')" title="Lề trái"></div>
+      <div class="we-ruler-margin we-ruler-margin-r" [style.width.px]="ruler().right" (mousedown)="startRulerDrag($event, 'marginRight')" title="Lề phải"></div>
+      @for (t of ruler().ticks; track $index) {
+        <span class="we-tick" [class.major]="t.major" [style.left.px]="t.x">{{ t.label }}</span>
+      }
+      <span class="we-ind we-ind-first" [style.left.px]="ruler().first" title="Thụt dòng đầu" (mousedown)="startRulerDrag($event, 'first')"></span>
+      <span class="we-ind we-ind-hang" [style.left.px]="ruler().hanging" title="Thụt trái" (mousedown)="startRulerDrag($event, 'hanging')"></span>
+      <span class="we-ind we-ind-right" [style.left.px]="ruler().indentRight" title="Thụt phải" (mousedown)="startRulerDrag($event, 'indentRight')"></span>
+    </div>
+  </div>
+}
+
+<!-- ===================== Vùng tài liệu (engine vẽ vào đây) ===================== -->
+<div #canvas class="we-canvas-host"></div>
+@if (dialog() === 'find') {
+  <ng-container *ngTemplateOutlet="findPanel" />
+}
+</div>
+
+<!-- ===================== Thanh trạng thái ===================== -->
+<footer class="we-status">
+  <span>Trang {{ layout().currentPage }} / {{ layout().pages }}</span>
+  <span>{{ layout().words }} từ</span>
+  <span class="we-status-lang">Tiếng Việt</span>
+  <span class="we-status-spacer"></span>
+  <button type="button" class="we-sbtn" [class.on]="view() === 'print'" title="Bố cục in" (click)="setView('print')"><we-icon name="printLayout" /></button>
+  <button type="button" class="we-sbtn" [class.on]="view() === 'web'" title="Bố cục web" (click)="setView('web')"><we-icon name="webLayout" /></button>
+  <button type="button" class="we-sbtn" title="Thu nhỏ" (click)="setZoom(zoom() - 0.1)">−</button>
+  <input class="we-zoom" type="range" min="25" max="400" step="5" aria-label="Thu phóng" [value]="zoomPct()" (input)="setZoom($any($event.target).valueAsNumber / 100)" />
+  <button type="button" class="we-sbtn" title="Phóng to" (click)="setZoom(zoom() + 0.1)">+</button>
+  <button type="button" class="we-sbtn we-zoom-pct" title="Đặt về 100%" (click)="setZoom(1)">{{ zoomPct() }}%</button>
+</footer>
+
+<ng-template #findPanel>
+    <div class="we-find" role="dialog" aria-label="Tìm và thay thế">
+      <div class="we-find-row">
+        <input placeholder="Tìm trong tài liệu" [value]="findForm().query" (input)="patch(findForm, 'query', $any($event.target).value); runFind()" (keydown.enter)="findNext($any($event).shiftKey)" />
+        <span class="we-find-count">
+          @if (findResult(); as r) { {{ r.count ? (r.current + 1 > 0 ? r.current + 1 : 0) + '/' + r.count : 'Không thấy' }} }
+        </span>
+        <button type="button" class="we-btn" title="Kết quả trước" (click)="findNext(true)">▲</button>
+        <button type="button" class="we-btn" title="Kết quả sau" (click)="findNext()">▼</button>
+        <button type="button" class="we-btn" title="Đóng" (click)="closeFind()"><we-icon name="close" /></button>
+      </div>
+      @if (findForm().showReplace) {
+        <div class="we-find-row">
+          <input placeholder="Thay bằng" [value]="findForm().replace" (input)="patch(findForm, 'replace', $any($event.target).value)" (keydown.enter)="replaceOne()" />
+          <button type="button" class="we-btn-sm" (click)="replaceOne()">Thay</button>
+          <button type="button" class="we-btn-sm" (click)="replaceAll()">Thay tất cả</button>
+        </div>
+      }
+      <div class="we-find-row we-find-opts">
+        <label><input type="checkbox" [checked]="findForm().matchCase" (change)="patch(findForm, 'matchCase', $any($event.target).checked); runFind()" /> Khớp chữ hoa/thường</label>
+        <label><input type="checkbox" [checked]="findForm().wholeWord" (change)="patch(findForm, 'wholeWord', $any($event.target).checked); runFind()" /> Cả từ</label>
+        <button type="button" class="we-link" (click)="patch(findForm, 'showReplace', !findForm().showReplace)">{{ findForm().showReplace ? 'Ẩn thay thế' : 'Thay thế…' }}</button>
+      </div>
+    </div>
+</ng-template>
+
+<!-- ===================== Hộp thoại ===================== -->
+@switch (dialog()) {
+  @case ('link') {
+    <div class="we-modal-backdrop" (mousedown)="dialog.set(null)">
+      <form class="we-modal" (mousedown)="$event.stopPropagation()" (submit)="$event.preventDefault(); applyLink()">
+        <h3>Chèn liên kết</h3>
+        <label>Văn bản hiển thị <input [value]="linkForm().text" (input)="patch(linkForm, 'text', $any($event.target).value)" /></label>
+        <label>Địa chỉ <input autofocus [value]="linkForm().href" (input)="patch(linkForm, 'href', $any($event.target).value)" /></label>
+        <div class="we-modal-actions">
+          @if (state()?.inLink) {
+            <button type="button" class="we-btn-sm" (click)="dialog.set(null); exec('unlink')">Bỏ liên kết</button>
+          }
+          <span class="we-status-spacer"></span>
+          <button type="button" class="we-btn-sm" (click)="dialog.set(null)">Huỷ</button>
+          <button type="submit" class="we-btn-sm we-primary">OK</button>
+        </div>
+      </form>
+    </div>
+  }
+  @case ('margins') {
+    <div class="we-modal-backdrop" (mousedown)="dialog.set(null)">
+      <form class="we-modal" (mousedown)="$event.stopPropagation()" (submit)="$event.preventDefault(); applyMargins()">
+        <h3>Lề trang (cm)</h3>
+        <div class="we-modal-grid">
+          <label>Trên <input type="number" step="0.1" min="0" [value]="marginForm().t" (input)="patch(marginForm, 't', $any($event.target).valueAsNumber)" /></label>
+          <label>Dưới <input type="number" step="0.1" min="0" [value]="marginForm().b" (input)="patch(marginForm, 'b', $any($event.target).valueAsNumber)" /></label>
+          <label>Trái <input type="number" step="0.1" min="0" [value]="marginForm().l" (input)="patch(marginForm, 'l', $any($event.target).valueAsNumber)" /></label>
+          <label>Phải <input type="number" step="0.1" min="0" [value]="marginForm().r" (input)="patch(marginForm, 'r', $any($event.target).valueAsNumber)" /></label>
+          <label>Đầu trang cách mép <input type="number" step="0.1" min="0" [value]="marginForm().h" (input)="patch(marginForm, 'h', $any($event.target).valueAsNumber)" /></label>
+          <label>Chân trang cách mép <input type="number" step="0.1" min="0" [value]="marginForm().f" (input)="patch(marginForm, 'f', $any($event.target).valueAsNumber)" /></label>
+        </div>
+        <div class="we-modal-actions">
+          <span class="we-status-spacer"></span>
+          <button type="button" class="we-btn-sm" (click)="dialog.set(null)">Huỷ</button>
+          <button type="submit" class="we-btn-sm we-primary">OK</button>
+        </div>
+      </form>
+    </div>
+  }
+  @case ('table') {
+    <div class="we-modal-backdrop" (mousedown)="dialog.set(null)">
+      <form class="we-modal" (mousedown)="$event.stopPropagation()" (submit)="$event.preventDefault(); insertTable(tableForm().rows, tableForm().cols)">
+        <h3>Chèn bảng</h3>
+        <div class="we-modal-grid">
+          <label>Số cột <input type="number" min="1" max="63" [value]="tableForm().cols" (input)="patch(tableForm, 'cols', $any($event.target).valueAsNumber)" /></label>
+          <label>Số hàng <input type="number" min="1" max="500" [value]="tableForm().rows" (input)="patch(tableForm, 'rows', $any($event.target).valueAsNumber)" /></label>
+        </div>
+        <div class="we-modal-actions">
+          <span class="we-status-spacer"></span>
+          <button type="button" class="we-btn-sm" (click)="dialog.set(null)">Huỷ</button>
+          <button type="submit" class="we-btn-sm we-primary">OK</button>
+        </div>
+      </form>
+    </div>
+  }
+  @case ('alt') {
+    <div class="we-modal-backdrop" (mousedown)="dialog.set(null)">
+      <form class="we-modal" (mousedown)="$event.stopPropagation()" (submit)="$event.preventDefault(); applyAlt()">
+        <h3>Văn bản thay thế</h3>
+        <label>Mô tả ảnh cho người dùng trình đọc màn hình <textarea rows="3" [value]="altText()" (input)="altText.set($any($event.target).value)"></textarea></label>
+        <div class="we-modal-actions">
+          <span class="we-status-spacer"></span>
+          <button type="button" class="we-btn-sm" (click)="dialog.set(null)">Huỷ</button>
+          <button type="submit" class="we-btn-sm we-primary">OK</button>
+        </div>
+      </form>
+    </div>
+  }
+  @case ('imageUrl') {
+    <div class="we-modal-backdrop" (mousedown)="dialog.set(null)">
+      <form class="we-modal" (mousedown)="$event.stopPropagation()" (submit)="$event.preventDefault(); insertImageUrl()">
+        <h3>Chèn ảnh từ URL</h3>
+        <label>Địa chỉ ảnh <input autofocus placeholder="https://…" [value]="imageUrl()" (input)="imageUrl.set($any($event.target).value)" /></label>
+        <div class="we-modal-actions">
+          <span class="we-status-spacer"></span>
+          <button type="button" class="we-btn-sm" (click)="dialog.set(null)">Huỷ</button>
+          <button type="submit" class="we-btn-sm we-primary">Chèn</button>
+        </div>
+      </form>
+    </div>
+  }
+}
+
+@if (busy(); as message) {
+  <div class="we-busy" role="status">{{ message }}</div>
+}
+@if (toast(); as message) {
+  <div class="we-toast" role="alert">{{ message }}</div>
+}

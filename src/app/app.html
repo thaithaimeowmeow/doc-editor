@@ -1,0 +1,46 @@
+<main class="layout">
+  <app-word-editor
+    class="editor"
+    [(html)]="html"
+    [docx]="docx()"
+    [readonly]="readonly()"
+    [emit]="emit"
+    [debounce]="300"
+    [docxDebounce]="1500"
+    (htmlChange)="count('html')"
+    (htmlBase64Change)="onHtmlBase64($event)"
+    (docxBase64Change)="onDocxBase64($event)"
+    (documentChange)="onDocument($event)"
+  />
+
+  <aside class="panel" aria-label="Input / output của editor">
+    <section class="inputs">
+      <h2>Input</h2>
+      <label class="file">Mở .docx qua <code>[docx]</code> <input type="file" accept=".docx" (change)="pickDocx($event)" /></label>
+      <label><input type="checkbox" [checked]="readonly()" (change)="readonly.set($any($event.target).checked)" /> <code>[readonly]</code></label>
+      <label class="html-in">
+        <code>[(html)]</code> – sửa ở đây sẽ đẩy vào editor
+        <textarea rows="3" [value]="html()" (change)="html.set($any($event.target).value)"></textarea>
+      </label>
+    </section>
+
+    <header class="panel-head">
+      <h2>Output</h2>
+      <div class="tabs" role="tablist">
+        @for (tab of tabs; track tab.kind) {
+          <button type="button" role="tab" [attr.aria-selected]="kind() === tab.kind" [class.active]="kind() === tab.kind" (click)="kind.set(tab.kind)">
+            {{ tab.label }} <span class="badge">{{ counts()[tab.kind] }}</span>
+          </button>
+        }
+      </div>
+    </header>
+
+    <textarea class="output" readonly [value]="output()" placeholder="Chưa có dữ liệu – hãy gõ vào tài liệu"></textarea>
+
+    <footer class="panel-foot">
+      <span>{{ size(output()) }} · số lần phát: {{ counts()[kind()] }}</span>
+      <span>{{ status() }}</span>
+      <button type="button" [disabled]="!output()" (click)="copy()">Copy</button>
+    </footer>
+  </aside>
+</main>
