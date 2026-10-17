@@ -22,12 +22,25 @@ purifier.addHook('afterSanitizeAttributes', node => {
 
 /** Làm sạch HTML trước khi đưa vào editor hoặc trả ra ngoài. */
 export function sanitize(html: string): string {
-  return purifier.sanitize(html, {
+  // Ảnh nhúng base64 chiếm gần hết dung lượng tài liệu (14 MB / 14,7 MB trong file 50 trang) và
+  // DOMPurify phải duyệt từng ký tự của chúng (170 ms). Thay bằng chỗ giữ chỗ rồi trả lại: ~37 ms.
+  // An toàn vì chỗ giữ chỗ vẫn nằm trong thuộc tính do DOMPurify kiểm tra; thuộc tính nào bị loại
+  // (vd: href="data:...") thì mất luôn chỗ giữ chỗ và không có gì để trả lại.
+  const images: string[] = [];
+  const light = html.length < LIGHT_THRESHOLD ? html : html.replace(IMAGE_DATA_URL, m => `${PLACEHOLDER}${images.push(m) - 1}@@`);
+  const clean = purifier.sanitize(light, {
     USE_PROFILES: { html: true },
     FORBID_TAGS: ['style', 'script', 'iframe', 'form', 'input', 'button', 'textarea', 'select', 'object', 'embed', 'video', 'audio', 'meta', 'link', 'base'],
     ADD_ATTR: ['target', 'start', 'colspan', 'rowspan'],
   }) as string;
+  return images.length ? clean.replace(PLACEHOLDER_RE, (m, i) => images[Number(i)] ?? m) : clean;
 }
+
+const LIGHT_THRESHOLD = 200_000;
+// Chỉ ảnh bitmap (không có svg: svg có thể chứa script).
+const IMAGE_DATA_URL = /data:image\/(?:png|jpe?g|gif|webp|bmp);base64,[A-Za-z0-9+/=]{200,}/g;
+const PLACEHOLDER = 'data:image/png;base64,@@';
+const PLACEHOLDER_RE = /data:image\/png;base64,@@(\d+)@@/g;
 
 const JUNK_CSS = /^(mso-|tab-stops|layout-grid|text-autospace|text-justify|font-variant-ligatures|font-variant-caps|orphans|widows|-webkit-|caret-color|word-spacing|text-size-adjust)/;
 

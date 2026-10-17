@@ -6,6 +6,9 @@ interface Snapshot {
   selection: SerializedSelection | null;
 }
 
+/** Tổng số node DOM tối đa giữ trong toàn bộ lịch sử undo. Đo thực tế: ~1,2 MB cho 5 nghìn node, nên 500 nghìn node ≈ 120 MB. */
+const NODE_BUDGET = 500_000;
+
 /** Undo/redo tự quản lý, không dùng stack gốc của trình duyệt (vốn bị rối khi DOM đổi bằng code). */
 export class History {
   private stack: Snapshot[] = [];
@@ -39,7 +42,11 @@ export class History {
     }
     this.stack.length = this.index + 1;
     this.stack.push(this.snapshot());
-    if (this.stack.length > this.limit) this.stack.shift();
+    // Mỗi snapshot là một bản sao DOM (~1,2 MB cho tài liệu 50 trang / 5 nghìn node), nên giới hạn số
+    // snapshot theo kích thước tài liệu: nhỏ thì giữ tới `limit`, lớn thì giữ ít hơn (tối thiểu 30).
+    const cap =
+      this.stack.length > 30 ? Math.max(30, Math.min(this.limit, Math.floor(NODE_BUDGET / Math.max(1, this.root.getElementsByTagName('*').length)))) : this.limit;
+    while (this.stack.length > cap) this.stack.shift();
     this.index = this.stack.length - 1;
     this.dirty = false;
   }

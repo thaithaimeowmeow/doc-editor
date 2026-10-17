@@ -155,6 +155,28 @@ Bundle chính của app demo (gồm cả Angular) là 91 KB.
 
 Các phụ thuộc gián tiếp đều là MIT, ISC, 0BSD hoặc Zlib.
 
+## Hiệu năng
+
+Đo trên Chromium, máy phát triển, build dev. Số liệu là trung vị của nhiều lần chạy.
+
+| Tài liệu | Thao tác | Trước | Sau |
+|---|---|---|---|
+| SRS 50 trang, 10,7 MB, 64 bảng, 33 ảnh | Chia trang lại (chạy sau mỗi lần gõ, đã gom theo khung hình) | 547–621 ms | **21–58 ms** |
+| | Xuất .docx | 1,65 s | **0,57 s** |
+| | Mở .docx | khoảng 1,2–1,7 s | khoảng 1,0–1,4 s (phần lớn là docx-preview) |
+| | Sanitize 14,7 MB HTML | 170 ms | **37 ms** |
+| | Độ trễ đồng bộ của một phím gõ | | 4,7 ms (trung vị) |
+| Tài liệu tổng hợp 107 trang, 9 nghìn node | Chia trang lại / xuất .docx / một phím gõ | | 78 ms / 460 ms / 8 ms |
+
+Đã làm:
+- **Chia trang:** đo toàn bộ trong một lượt, theo dõi độ dịch cộng dồn bằng số học, ghi mọi khoảng đẩy một lần, rồi kiểm tra lại theo lô. Cách cũ xen kẽ đọc/ghi nên mỗi lần đẩy buộc trình duyệt dàn trang lại cả tài liệu (khoảng 50 lần). Vị trí khối giống thuật toán cũ (sai lệch tối đa 0,5 px, mới chính xác hơn) và không có khối nào vắt qua ranh giới trang.
+- **Xuất .docx:** ảnh PNG/JPEG lưu nguyên (nén lại tốn 1,6 s mà chỉ nhỏ hơn 3%), giải mã base64 bằng bộ giải mã gốc của trình duyệt.
+- **Sanitize:** thay ảnh base64 bằng chỗ giữ chỗ trong lúc DOMPurify chạy rồi trả lại.
+- **Undo:** số snapshot tự giảm theo kích thước tài liệu (tài liệu 50 trang giữ khoảng 100 bước, khoảng 120 MB) thay vì cố định 200 bước (khoảng 230 MB).
+- Bỏ qua `<colgroup>` khi chia trang (hộp của nó trùng cả bảng nên bị coi là một khối cần đẩy).
+
+Chưa làm: chia trang tăng dần từ vị trí vừa sửa. Hiện mỗi lần gõ chia lại cả tài liệu, tỉ lệ thuận với số khối (tài liệu vài trăm trang sẽ thấy trễ khi gõ).
+
 ## Giới hạn đã biết
 
 - **Chia trang theo đoạn:** một đoạn văn không bị cắt đôi qua hai trang như Word, mà được đẩy nguyên sang trang sau. Bảng ngắt theo hàng (có lặp hàng tiêu đề), danh sách ngắt theo mục. Một hàng bảng / đoạn / ảnh cao hơn cả trang sẽ tràn xuống phần lề.

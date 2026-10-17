@@ -98,12 +98,22 @@ export async function exportDocx(input: ExportInput): Promise<Blob> {
       );
     }
   }
-  for (const m of pkg.media) zip.file(m.path, m.data, { base64: true });
+  // Ảnh PNG/JPEG/GIF đã nén sẵn: nén lại chỉ tốn CPU (≈1,6 s cho 14 MB ảnh, kích thước đổi ~3%), nên lưu nguyên.
+  // Giải mã base64 bằng trình duyệt (native) thay vì bộ giải mã JS của jszip.
+  const bytes = await Promise.all(pkg.media.map(m => base64ToBytes(m.data)));
+  pkg.media.forEach((m, i) => zip.file(m.path, bytes[i], { compression: 'STORE' }));
 
   return zip.generateAsync({ type: 'blob', mimeType: DOCX_MIME, compression: 'DEFLATE' });
 }
 
 // ---------------------------------------------------------------------------------------------------
+
+/** Giải mã base64 → byte bằng bộ giải mã gốc của trình duyệt (nhanh hơn nhiều so với JS thuần). */
+async function base64ToBytes(b64: string): Promise<Uint8Array> {
+  const native = (Uint8Array as unknown as { fromBase64?: (s: string) => Uint8Array }).fromBase64;
+  if (native) return native.call(Uint8Array, b64);
+  return new Uint8Array(await (await fetch(`data:application/octet-stream;base64,${b64}`)).arrayBuffer());
+}
 
 const XML_HEAD = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
 const PR = 'http://schemas.openxmlformats.org/package/2006/relationships';
