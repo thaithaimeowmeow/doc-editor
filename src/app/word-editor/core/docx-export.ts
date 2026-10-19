@@ -1,7 +1,7 @@
 import { DOCX_MIME } from './base64';
 import { imageSize } from './dom';
 import { buildGrid, cellPos } from './table';
-import { PageSetup, cssColorToHex, cssToPx, pxToEmu, pxToTwip } from './units';
+import { PageSetup, cssColorToHex, cssToPx, naturalLineFactor, pxToEmu, pxToTwip } from './units';
 
 export interface ExportInput {
   html: string;
@@ -359,6 +359,12 @@ class Package {
     if (el?.classList.contains('we-title')) style = 'Title';
     if (el?.classList.contains('we-subtitle')) style = 'Subtitle';
     if (style) ppr.push(`<w:pStyle w:val="${style}"/>`);
+    // Kiểu Heading/Title đã có keepNext sẵn; chỉ ghi khi khác kiểu (bật cho đoạn thường, tắt rõ ràng cho đề mục).
+    const keepNext = s?.breakAfter === 'avoid' || s?.getPropertyValue('page-break-after') === 'avoid';
+    const styleKeeps = !!el && (!!HEADINGS[el.tagName] || el.classList.contains('we-title') || el.classList.contains('we-subtitle'));
+    if (keepNext && !styleKeeps) ppr.push('<w:keepNext/>');
+    else if (!keepNext && styleKeeps && s?.breakAfter === 'auto') ppr.push('<w:keepNext w:val="0"/>');
+    if (s?.breakInside === 'avoid') ppr.push('<w:keepLines/>');
     if (s && (s.pageBreakBefore === 'always' || s.breakBefore === 'page')) ppr.push('<w:pageBreakBefore/>');
     if (numPr) ppr.push(numPr);
     const bg = cssColorToHex(s?.backgroundColor);
@@ -366,7 +372,7 @@ class Package {
 
     const before = cssToPx(s?.marginTop, fontPx);
     const after = cssToPx(s?.marginBottom, fontPx);
-    const line = this.lineSpacing(s?.lineHeight || ctx.lineHeight, fontPx);
+    const line = this.lineSpacing(s?.lineHeight || ctx.lineHeight, fontPx, run.font);
     const spacing = [
       before !== null ? `w:before="${pxToTwip(Math.max(0, before))}"` : '',
       after !== null ? `w:after="${pxToTwip(Math.max(0, after))}"` : '',
@@ -404,9 +410,10 @@ class Package {
     return `<w:p>${ppr.length ? `<w:pPr>${ppr.join('')}</w:pPr>` : ''}${runs.join('')}</w:p>`;
   }
 
-  private lineSpacing(v: string | undefined, fontPx: number): string {
+  private lineSpacing(v: string | undefined, fontPx: number, font?: string): string {
     if (!v || v === 'normal') return '';
-    if (/^[\d.]+$/.test(v)) return `w:line="${Math.round(240 * parseFloat(v))}" w:lineRule="auto"`;
+    // CSS nhân với cỡ chữ, Word nhân với chiều cao dòng đơn của phông: chia lại cho đúng "multiple" của Word.
+    if (/^[\d.]+$/.test(v)) return `w:line="${Math.round(240 * (Math.round((parseFloat(v) / naturalLineFactor(font ? `'${font}'` : undefined)) * 100) / 100))}" w:lineRule="auto"`;
     if (v.endsWith('%')) return `w:line="${Math.round(2.4 * parseFloat(v))}" w:lineRule="auto"`;
     const px = cssToPx(v, fontPx);
     return px ? `w:line="${pxToTwip(px)}" w:lineRule="atLeast"` : '';
@@ -528,7 +535,7 @@ class Package {
       `<w:tblPr>${tblW}${centered ? '<w:jc w:val="center"/>' : ''}` +
       (ctx.indentLeft ? `<w:tblInd w:w="${pxToTwip(ctx.indentLeft)}" w:type="dxa"/>` : '') +
       tblBorders +
-      `<w:tblLayout w:type="fixed"/><w:tblCellMar>${cellMar}</w:tblCellMar>` +
+      `${table.dataset['weAutofit'] ? '' : '<w:tblLayout w:type="fixed"/>'}<w:tblCellMar>${cellMar}</w:tblCellMar>` +
       `<w:tblLook w:val="04A0" w:firstRow="0" w:lastRow="0" w:firstColumn="0" w:lastColumn="0" w:noHBand="1" w:noVBand="1"/></w:tblPr>`;
     const grid = `<w:tblGrid>${widths.map(w => `<w:gridCol w:w="${pxToTwip(w)}"/>`).join('')}</w:tblGrid>`;
 
@@ -570,7 +577,8 @@ class Package {
         cells.push(`<w:tc><w:tcPr>${tcPr.join('')}</w:tcPr>${content}</w:tc>`);
         c += span;
       }
-      const header = tr.parentElement?.tagName === 'THEAD' ? '<w:trPr><w:tblHeader/></w:trPr>' : '';
+      const trPr = (tr.style.breakInside === 'avoid' ? '<w:cantSplit/>' : '') + (tr.parentElement?.tagName === 'THEAD' ? '<w:tblHeader/>' : '');
+      const header = trPr ? `<w:trPr>${trPr}</w:trPr>` : '';
       rows.push(`<w:tr>${header}${cells.join('')}</w:tr>`);
     }
     return `<w:tbl>${tblPr}${grid}${rows.join('')}</w:tbl>`;

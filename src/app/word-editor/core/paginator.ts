@@ -93,6 +93,11 @@ export class Paginator {
     if (inc) {
       // Lùi một khối (margin gộp với khối trước; ngắt trang cưỡng bức đứng trước khối bị sửa).
       start = from!.previousElementSibling ?? from!;
+      // Chuỗi keepNext đứng trước, và ngắt trang cưỡng bức ngay trước điểm bắt đầu (nó quyết định vị trí khối kế tiếp).
+      for (let prev = start.previousElementSibling; prev; prev = start.previousElementSibling) {
+        if (!prev.classList.contains('we-page-break') && !keepsNext(prev as HTMLElement)) break;
+        start = prev;
+      }
       while (start.classList.contains('we-page-break') && start.previousElementSibling) start = start.previousElementSibling;
       this.drop(start);
     } else this.clear();
@@ -163,7 +168,14 @@ export class Paginator {
           push(el, (page + 1) * g.stride - r.top, r.top);
           continue;
         }
-        if (r.bottom <= pageBottom + EPS) continue;
+        if (r.bottom <= pageBottom + EPS) {
+          // Giữ với đoạn sau (keepNext, đề mục): cả chuỗi phải nằm trên một trang, không thì đẩy từ đầu chuỗi.
+          if (local > EPS && keepsNext(el)) {
+            const need = keepEnd(el, r.bottom, g.avail, rect);
+            if (need > pageBottom + EPS && need - r.top <= g.avail) push(el, (page + 1) * g.stride - r.top, r.top);
+          }
+          continue;
+        }
 
         // Cắt qua đáy trang: bảng/danh sách thì ngắt giữa các hàng/mục như Word.
         if (DESCEND.has(el.tagName) && hasBlockChildren(el)) {
@@ -275,6 +287,36 @@ export class Paginator {
       this.sheet.textContent = [...this.rules.values()].join('\n');
     }
   }
+}
+
+/** Đoạn có keepNext: khai báo `break-after: avoid` (từ .docx), hoặc là đề mục (như kiểu Heading của Word) nếu không khai báo gì. */
+function keepsNext(el: HTMLElement): boolean {
+  const v = el.style.breakAfter;
+  return v ? v.includes('avoid') : /^H[1-6]$/.test(el.tagName);
+}
+
+/**
+ * Đáy của phần cần nằm cùng trang với `el` khi đi theo chuỗi keepNext: khối kế tiếp là đoạn thì cả đoạn,
+ * là bảng thì tới hàng đầu tiên sau hàng tiêu đề, là danh sách thì mục đầu. Khối kế tiếp cao hơn một trang
+ * thì không thể giữ, dừng chuỗi ở đó.
+ */
+function keepEnd(el: HTMLElement, bottom: number, avail: number, rect: (e: Element) => { top: number; bottom: number; height: number }): number {
+  let end = bottom;
+  let cur = el;
+  for (let i = 0; i < 10 && keepsNext(cur); i++) {
+    const next = cur.nextElementSibling as HTMLElement | null;
+    if (!next || next.classList.contains('we-page-break') || next.classList.contains(SPACER) || SKIP.has(next.tagName)) break;
+    let target: Element = next;
+    if (next.tagName === 'TABLE') {
+      const rows = (next as HTMLTableElement).rows;
+      target = rows[Math.min(rows.length - 1, (next as HTMLTableElement).tHead?.rows.length ?? 0)] ?? next;
+    } else if (next.tagName === 'UL' || next.tagName === 'OL') target = next.querySelector('li') ?? next;
+    const r = rect(target);
+    if (r.bottom - rect(el).top > avail) break;
+    end = r.bottom;
+    cur = next;
+  }
+  return end;
 }
 
 function hasBlockChildren(el: HTMLElement) {

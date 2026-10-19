@@ -16,7 +16,7 @@ import { Paginator } from './paginator';
 import { buildPrintHtml, fillFields, printHtml } from './print';
 import { cleanPastedHtml, sanitize, stripTransient } from './sanitize';
 import * as T from './table';
-import { DEFAULT_PAGE, PX_PER_PT, PageSetup, cssColorToHex, cssToPx } from './units';
+import { DEFAULT_PAGE, PX_PER_PT, PageSetup, cssColorToHex, cssToPx, naturalLineFactor } from './units';
 
 export interface WordDocument {
   html: string;
@@ -76,6 +76,14 @@ export interface EngineListener {
 }
 
 const GAP = 16;
+
+/** Giãn dòng của khối theo "multiple" của Word ('1', '1.15'…); giá trị không phải số (px, normal) giữ nguyên. */
+function lineMultiple(block: HTMLElement): string {
+  const v = block.style.lineHeight;
+  if (!/^[\d.]+$/.test(v)) return v;
+  return String(Math.round((Number(v) / naturalLineFactor(getComputedStyle(block).fontFamily)) * 100) / 100);
+}
+
 /** Lệnh vẫn chạy được ở chế độ chỉ xem. */
 const READONLY_OK = new Set(['copy', 'selectAll']);
 const ZOOM_MIN = 0.25;
@@ -443,7 +451,8 @@ export class WordEngine {
         this.indent(cmd === 'indent');
         break;
       case 'lineHeight':
-        for (const b of this.blocks()) b.style.lineHeight = v;
+        // v là "multiple" kiểu Word; CSS cần nhân thêm chiều cao dòng đơn của phông (xem naturalLineFactor).
+        for (const b of this.blocks()) b.style.lineHeight = String(Math.round(Number(v) * naturalLineFactor(getComputedStyle(b).fontFamily) * 1000) / 1000);
         break;
       case 'spaceBefore':
       case 'spaceAfter':
@@ -763,7 +772,7 @@ export class WordEngine {
       list: list ? (list.tagName.toLowerCase() as 'ul' | 'ol') : null,
       fontName: cs.fontFamily.split(',')[0].replace(/["']/g, '').trim(),
       fontSize: Math.round(fontPx * 0.75 * 2) / 2,
-      lineHeight: block?.style.lineHeight || '',
+      lineHeight: block ? lineMultiple(block) : '',
       inTable: inside && !!closestTag(node, ['td', 'th'], ed),
       cellsSelected: this.selectedCells.length,
       inLink: inside && !!closestTag(node, ['a'], ed),

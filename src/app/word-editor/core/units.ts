@@ -102,3 +102,26 @@ export function cssColorToHex(value: string | null | undefined): string | null {
   }
   return null;
 }
+
+const naturalCache = new Map<string, number>();
+
+/**
+ * Chiều cao một dòng đơn của phông (tỉ lệ so với cỡ chữ, vd Times New Roman ≈ 1,149).
+ * "Multiple" của Word (1,15; 1,5…) nhân với số này, còn CSS `line-height: 1.15` chỉ nhân với cỡ chữ,
+ * nên tài liệu Word giãn dòng 1,15 hiển thị thấp hơn bản gốc ~15% nếu bỏ qua hệ số này.
+ */
+export function naturalLineFactor(fontFamily: string | null | undefined): number {
+  const family = (fontFamily ?? '').trim() || "'Times New Roman'";
+  let k = naturalCache.get(family);
+  if (k === undefined) {
+    const probe = document.createElement('span');
+    probe.textContent = 'Hg';
+    probe.style.cssText = `position:absolute;left:-9999px;top:0;visibility:hidden;white-space:nowrap;font-size:100px;line-height:normal;font-family:${family}`;
+    document.body.append(probe);
+    k = probe.getBoundingClientRect().height / 100;
+    probe.remove();
+    if (!(k > 0.8 && k < 2)) k = 1.149;
+    naturalCache.set(family, k);
+  }
+  return k;
+}

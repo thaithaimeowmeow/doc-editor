@@ -145,7 +145,7 @@ word-editor/
 | Lưu .docx: docx-export | khoảng 8 KB, tải khi cần |
 | jszip (dùng chung cho mở và lưu) | khoảng 27 KB, tải khi cần |
 
-Bundle chính của app demo (gồm cả Angular) là 91 KB.
+Bundle chính của app demo (gồm cả Angular) là 93 KB.
 
 ## License (miễn phí cho thương mại)
 
@@ -191,10 +191,33 @@ Tài liệu dưới khoảng 60 trang luôn nằm trong một khung hình (16 ms
 
 Chưa làm: dừng sớm khi bố cục phía sau không đổi sau một lần sửa làm đổi chiều cao (cần biết vị trí cũ của từng khoảng đẩy).
 
+## Độ khớp với Word
+
+Kiểm tra bằng Microsoft Word thật (tự động hoá qua COM): mở file gốc và file đã nhập–xuất lại bằng editor, so số trang và vị trí (trang, toạ độ y) của từng đoạn.
+
+| File | Số trang gốc → sau khi lưu lại | Đoạn cùng trang | Lệch y lớn nhất |
+|---|---|---|---|
+| SRS 55 trang (71 bảng, 34 ảnh) | 55 → 55 | 211/211 | 21 pt (trung vị 0, p90 0,65 pt) |
+| view-file-s3service-scan / -scan-v2 / -usage | 5/4/4 → 5/4/4 | tất cả | 0 pt |
+| hop-dong-nhieu-trang | 4 → 4 | 28/28 | 0 pt |
+| bien-ban-mau | 2 → 2 | 12/12 | 4,3 pt |
+
+Ngoài ra editor tự dàn trang của SRS ra 55 trang, và 170/170 đoạn khớp trang với Word (trước khi sửa: 52 trang, 33/170).
+
+Những chỗ trước đây lệch và đã sửa:
+- **Giãn dòng "multiple"** (1,15; 1,5…): Word nhân với chiều cao dòng đơn của phông (Times New Roman ≈ 1,149), CSS chỉ nhân với cỡ chữ nên tài liệu thấp hơn ~13%. Nay nhân thêm hệ số phông khi nhập, chia lại khi xuất.
+- **keepNext / keepLines** (đề mục không bị bỏ lại cuối trang tách khỏi nội dung sau nó): đọc từ XML và kiểu đoạn, lưu bằng `break-after: avoid` / `break-inside: avoid`, trình chia trang xử lý cả chuỗi, xuất lại thành `w:keepNext` / `w:keepLines`. Đề mục không khai báo gì thì mặc định giữ với đoạn sau.
+- **cantSplit**: hàng bảng không ngắt qua trang, đọc và xuất lại.
+- **Bảng tự co giãn**: không ép `tblLayout=fixed` khi gốc không có, nếu không cột hẹp (vd "STT") bị ngắt chữ và hàng cao hơn.
+- **Đoạn trống**: chiều cao theo cỡ chữ của dấu đoạn văn (pPr/rPr, kiểu, docDefaults), kể cả trong ô bảng.
+- **Ngắt trang**: đoạn chỉ chứa ngắt trang bị tách thành hai đoạn trống, làm mọi trang sau lệch một dòng.
+
+Chưa khớp hoàn toàn: file gốc không có `compatibilityMode` (vd xuất từ Google Docs) được Word dàn theo quy tắc cũ, còn file xuất ra luôn ở chế độ 15, nên vài hàng bảng sát đáy trang có thể rơi sang trang khác (SRS: 9/71 bảng lệch dưới 21 pt, số trang vẫn đủ).
+
 ## Giới hạn đã biết
 
 - **Chia trang theo đoạn:** một đoạn văn không bị cắt đôi qua hai trang như Word, mà được đẩy nguyên sang trang sau. Bảng ngắt theo hàng (có lặp hàng tiêu đề), danh sách ngắt theo mục. Một hàng bảng / đoạn / ảnh cao hơn cả trang sẽ tràn xuống phần lề.
 - Không có: chú thích cuối trang, mục lục tự động, text box, ảnh nổi (wrap text), track changes, comment, cột báo, nhiều section với khổ giấy khác nhau.
 - Lệnh định dạng dùng `document.execCommand`. API này đã bị đánh dấu deprecated nhưng mọi trình duyệt chính vẫn hỗ trợ.
 - Tô sáng kết quả tìm kiếm cần CSS Custom Highlight API (Chrome 105+, Safari 17.2+, Firefox 140+). Trình duyệt cũ vẫn tìm và chọn được, chỉ không tô sáng tất cả kết quả.
-- File .docx xuất ra đã kiểm tra XML hợp lệ và mở lại đúng bằng docx-preview, **chưa kiểm tra bằng Microsoft Word / LibreOffice**.
+- File .docx xuất ra đã mở được bằng Microsoft Word thật và so bố cục với file gốc (xem phần Độ khớp với Word). Chưa kiểm tra bằng LibreOffice.

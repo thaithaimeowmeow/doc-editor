@@ -1,6 +1,6 @@
 import { PAGE_BREAK_HTML } from './dom';
 import { ListItem, buildLists } from './lists';
-import { DEFAULT_PAGE, PageSetup, twipToPx } from './units';
+import { DEFAULT_PAGE, PageSetup, naturalLineFactor, twipToPx } from './units';
 
 export interface HeaderFooter {
   header: string;
@@ -44,13 +44,14 @@ const formatValue = (prop: string, value: string) =>
  * Giãn dòng "multiple" của Word (1,15; 1,5…) được trình duyệt tính ra px. Nếu px đúng là bội số của
  * cỡ chữ thì ghi lại dạng tỉ lệ: co giãn theo cỡ chữ như Word và xuất ra .docx thành `lineRule="auto"`.
  */
-function lineHeightValue(value: string, fontSize: string | undefined): string {
+function lineHeightValue(value: string, fontSize: string | undefined, fontFamily: string | undefined): string {
   const px = parseFloat(value);
   const fs = parseFloat(fontSize ?? '');
   if (!value.endsWith('px') || !fs) return value;
   const ratio = px / fs;
   const rounded = Math.round(ratio * 100) / 100;
-  return ratio >= 0.5 && ratio <= 5 && Math.abs(ratio - rounded) < 0.0005 ? String(rounded) : value;
+  // Word: multiple × chiều cao dòng đơn của phông, CSS: multiple × cỡ chữ → nhân thêm hệ số dòng đơn của phông.
+  return ratio >= 0.5 && ratio <= 5 && Math.abs(ratio - rounded) < 0.0005 ? String(Math.round(rounded * naturalLineFactor(fontFamily) * 1000) / 1000) : value;
 }
 
 /** Font mặc định phải trùng với `.we-doc` trong content-css.ts. */
@@ -88,6 +89,7 @@ export async function importDocx(file: Blob): Promise<ImportedDocx> {
     const docXml = await readXml(zip, 'word/document.xml');
     const tables = articles.flatMap(a => Array.from(a.querySelectorAll('table')));
 
+    markKeep(articles, docXml, await readXml(zip, 'word/styles.xml'));
     const headings = readHeadings(articles);
     const lists = readLists(articles);
     inlineStyles(articles, box);
@@ -97,6 +99,8 @@ export async function importDocx(file: Blob): Promise<ImportedDocx> {
     unwrapInlineDivs(articles);
     hoistRunStyles(articles);
     fillEmptyBlocks(articles);
+    applyKeep(articles);
+    dropBreakRemainders(articles, docXml);
 
     const html = articles.map(a => a.innerHTML).join(PAGE_BREAK_HTML);
     const { page, hf } = await readSectionXml(zip, sections[0], docXml);
@@ -141,7 +145,7 @@ function inlineStyles(roots: HTMLElement[], baseline: HTMLElement) {
     for (const [prop, value] of values) {
       const inherited = (INHERITED as readonly string[]).includes(prop);
       const skip = inherited ? parent.get(prop) === value : isDefault(prop, value);
-      if (!skip) decl.push(`${prop}: ${prop === 'line-height' ? lineHeightValue(value, values.get('font-size')) : formatValue(prop, value)}`);
+      if (!skip) decl.push(`${prop}: ${prop === 'line-height' ? lineHeightValue(value, values.get('font-size'), values.get('font-family')) : formatValue(prop, value)}`);
     }
     el.removeAttribute('class');
     if (decl.length) el.setAttribute('style', decl.join('; '));
@@ -438,6 +442,9 @@ function applyTableXml(tables: HTMLTableElement[], doc: Document | null) {
     table.style.removeProperty('padding-right');
 
     const tblPr = child(x, 'tblPr');
+    // Bảng tự co giãn (không có tblLayout=fixed): Word nới cột theo nội dung ngắn nhất; editor vẫn vẽ theo tblGrid
+    // nhưng ghi nhớ để khi xuất không ép `fixed` (ép sẽ làm cột hẹp bị ngắt chữ, hàng cao hơn bản gốc).
+    if (wAttr(child(tblPr, 'tblLayout'), 'type') !== 'fixed') table.dataset['weAutofit'] = '1';
     const jc = wAttr(child(tblPr, 'jc'), 'val');
     if (jc === 'center') {
       table.style.marginLeft = 'auto';
@@ -447,6 +454,11 @@ function applyTableXml(tables: HTMLTableElement[], doc: Document | null) {
     }
     const ind = Number(wAttr(child(tblPr, 'tblInd'), 'w'));
     if (ind && jc !== 'center') table.style.marginLeft = `${Math.round(twipToPx(ind) * 100) / 100}px`;
+
+    // Hàng không được ngắt qua trang (w:cantSplit) → `break-inside: avoid`; xuất lại thành cantSplit.
+    xmlRows.forEach((xr, k) => {
+      if (isOn(child(child(xr, 'trPr'), 'cantSplit'))) rows[k].style.breakInside = 'avoid';
+    });
 
     // Hàng tiêu đề lặp lại ở đầu mỗi trang → <thead>.
     let headerRows = 0;
@@ -463,6 +475,157 @@ function applyTableXml(tables: HTMLTableElement[], doc: Document | null) {
       for (const r of rows.slice(0, headerRows)) thead.append(r);
     }
   });
+}
+
+// ---------- Ngắt trang ----------
+
+/**
+ * Đoạn Word chỉ chứa `<w:br w:type="page"/>` được docx-preview tách thành hai đoạn trống: một ở cuối trang trước,
+ * một ở đầu trang sau. Word chỉ có một đoạn (dấu đoạn văn nằm cùng dòng với dấu ngắt trang, không chiếm dòng ở trang sau),
+ * nên bỏ đoạn trống đầu trang sau; nếu không mọi trang sau ngắt trang đều bị đẩy xuống một dòng.
+ * Chỉ làm khi số ngắt trang trong XML khớp số section đã tách (không thì không đủ căn cứ để ghép).
+ */
+function dropBreakRemainders(roots: HTMLElement[], doc: Document | null) {
+  if (!doc || roots.length < 2) return;
+  const breaks = Array.from(doc.getElementsByTagNameNS(W, 'br')).filter(b => wAttr(b, 'type') === 'page');
+  if (breaks.length !== roots.length - 1) return;
+  breaks.forEach((br, k) => {
+    let p: Element | null = br;
+    while (p && p.localName !== 'p') p = p.parentElement;
+    if (!p) return;
+    const hasContentAfter = Array.from(p.getElementsByTagNameNS(W, '*')).some(n => {
+      if (!(br.compareDocumentPosition(n) & Node.DOCUMENT_POSITION_FOLLOWING)) return false;
+      if (n.localName === 't') return !!n.textContent;
+      return ['drawing', 'pict', 'tab', 'br', 'sym'].includes(n.localName);
+    });
+    if (hasContentAfter) return;
+    const head = roots[k + 1].firstElementChild;
+    if (head?.tagName === 'P' && !head.querySelector('img') && !head.textContent?.trim()) head.remove();
+  });
+}
+
+// ---------- Giữ đoạn với đoạn sau / giữ nguyên đoạn (keepNext, keepLines) ----------
+
+const isOn = (el: Element | null | undefined) => !!el && !['0', 'false', 'off'].includes(wAttr(el, 'val') ?? '1');
+
+/** keepNext / keepLines hiệu lực của một đoạn: khai báo trực tiếp, nếu không thì theo kiểu (chuỗi basedOn). */
+function keepOf(p: Element, styles: Map<string, Element>, defaultStyle: string | undefined) {
+  const pPr = child(p, 'pPr');
+  const out: { next?: boolean; lines?: boolean } = {};
+  for (const [name, key] of [['keepNext', 'next'], ['keepLines', 'lines']] as const) {
+    const direct = child(pPr, name);
+    if (direct) {
+      out[key] = isOn(direct);
+      continue;
+    }
+    let id: string | undefined = wAttr(child(pPr, 'pStyle'), 'val') ?? defaultStyle;
+    for (let depth = 0; id && depth < 12; depth++) {
+      const st = styles.get(id);
+      const flag = child(child(st, 'pPr'), name);
+      if (flag) {
+        out[key] = isOn(flag);
+        break;
+      }
+      id = wAttr(child(st, 'basedOn'), 'val') ?? undefined;
+    }
+  }
+  return out;
+}
+
+/** Cỡ chữ (half-point) của dấu đoạn văn: pPr/rPr, rồi kiểu đoạn (chuỗi basedOn), rồi docDefaults. */
+function markSize(p: Element, styles: Map<string, Element>, defaultStyle: string | undefined, docDefault: number): number {
+  const direct = Number(wAttr(child(child(child(p, 'pPr'), 'rPr'), 'sz'), 'val'));
+  if (direct > 0) return direct;
+  let id: string | undefined = wAttr(child(child(p, 'pPr'), 'pStyle'), 'val') ?? defaultStyle;
+  for (let depth = 0; id && depth < 12; depth++) {
+    const st = styles.get(id);
+    const sz = Number(wAttr(child(child(st, 'rPr'), 'sz'), 'val'));
+    if (sz > 0) return sz;
+    id = wAttr(child(st, 'basedOn'), 'val') ?? undefined;
+  }
+  return docDefault;
+}
+
+/**
+ * docx-preview bỏ qua keepNext/keepLines, nên đọc từ XML rồi gắn tạm `data-we-keep` lên khối cấp cao nhất
+ * tương ứng (ghép dãy đoạn/bảng của XML với dãy khối đã dựng bằng LCS). Đến cuối `applyKeep` đổi thành CSS inline.
+ */
+function markKeep(roots: HTMLElement[], doc: Document | null, stylesDoc: Document | null) {
+  const body = doc?.getElementsByTagNameNS(W, 'body')[0];
+  if (!body) return;
+  const styles = new Map<string, Element>();
+  let defaultStyle: string | undefined;
+  for (const st of Array.from(stylesDoc?.getElementsByTagNameNS(W, 'style') ?? [])) {
+    const id = wAttr(st, 'styleId');
+    if (!id) continue;
+    styles.set(id, st);
+    if (wAttr(st, 'type') === 'paragraph' && wAttr(st, 'default') === '1') defaultStyle = id;
+  }
+  const docDefaultSz = Number(wAttr(child(child(child(child(stylesDoc?.documentElement, 'docDefaults'), 'rPrDefault'), 'rPr'), 'sz'), 'val')) || 0;
+  const xml = Array.from(body.children).filter(c => c.localName === 'p' || c.localName === 'tbl');
+  const rendered = roots.flatMap(r => Array.from(r.children) as HTMLElement[]).filter(e => e.tagName === 'P' || e.tagName === 'TABLE');
+  const norm = (s: string) => s.replace(/\s+/g, '').slice(0, 16);
+  const xmlText = (x: Element) => norm(Array.from(x.getElementsByTagNameNS(W, 't')).map(t => t.textContent).join(''));
+
+  // Ghép hai dãy bằng LCS theo (loại khối, 16 ký tự đầu): docx-preview chèn/bớt vài khối (ảnh, ngắt trang) nên không ghép thẳng theo chỉ số.
+  const xs = xml.map(x => `${x.localName}:${x.localName === 'p' ? xmlText(x) : ''}`);
+  const rs = rendered.map(e => `${e.tagName === 'TABLE' ? 'tbl' : 'p'}:${e.tagName === 'P' ? norm(e.textContent ?? '') : ''}`);
+  const n = xs.length;
+  const m = rs.length;
+  const dp = new Uint16Array((n + 1) * (m + 1));
+  const at = (i: number, j: number) => i * (m + 1) + j;
+  for (let i = n - 1; i >= 0; i--)
+    for (let j = m - 1; j >= 0; j--) dp[at(i, j)] = xs[i] === rs[j] ? dp[at(i + 1, j + 1)] + 1 : Math.max(dp[at(i + 1, j)], dp[at(i, j + 1)]);
+  const pairs: [Element, HTMLElement][] = [];
+  for (let i = 0, j = 0; i < n && j < m; ) {
+    if (xs[i] === rs[j]) pairs.push([xml[i++], rendered[j++]]);
+    else if (dp[at(i + 1, j)] >= dp[at(i, j + 1)]) i++;
+    else j++;
+  }
+  // Đoạn trống: chiều cao do cỡ chữ của dấu đoạn văn (pPr/rPr/sz, rồi kiểu, rồi docDefaults) quyết định, docx-preview không áp dụng.
+  const markEmpty = (x: Element, el: HTMLElement) => {
+    const empty = !xmlText(x) && !x.getElementsByTagNameNS(W, 'drawing').length && !x.getElementsByTagNameNS(W, 'pict').length;
+    const sz = empty ? markSize(x, styles, defaultStyle, docDefaultSz) : 0;
+    if (sz > 0 && !el.textContent?.trim() && !el.querySelector('img')) el.setAttribute('data-we-sz', String(sz / 2));
+  };
+  for (const [x, el] of pairs) {
+    if (x.localName === 'tbl') {
+      // Ô bảng: ghép hàng, ô, đoạn theo thứ tự khi số lượng khớp.
+      const xr = children(x, 'tr');
+      const rr = Array.from((el as HTMLTableElement).rows).filter(r => r.closest('table') === el);
+      if (xr.length !== rr.length) continue;
+      xr.forEach((row, i) => {
+        const xc = children(row, 'tc');
+        const rc = Array.from(rr[i].cells);
+        if (xc.length !== rc.length) return;
+        xc.forEach((cell, j) => {
+          const xp = children(cell, 'p');
+          const rp = Array.from(rc[j].children).filter(c => c.tagName === 'P') as HTMLElement[];
+          if (xp.length === rp.length) xp.forEach((pp, k) => markEmpty(pp, rp[k]));
+        });
+      });
+      continue;
+    }
+    const k = keepOf(x, styles, defaultStyle);
+    // Không khai báo keepNext = tắt (Word); chỉ cần ghi rõ cho đề mục, vì editor và kiểu Heading khi xuất mặc định giữ với đoạn sau.
+    const v = `${k.next ? 'n' : 'x'}${k.lines ? 'l' : ''}`;
+    if (v) el.setAttribute('data-we-keep', v);
+    markEmpty(x, el);
+  }
+}
+
+/** `data-we-keep` → CSS inline: `break-after: avoid` (keepNext), `auto` (tắt rõ ràng), `break-inside: avoid` (keepLines). */
+function applyKeep(roots: HTMLElement[]) {
+  for (const el of roots.flatMap(r => Array.from(r.querySelectorAll<HTMLElement>('[data-we-keep], [data-we-sz]')))) {
+    const v = el.getAttribute('data-we-keep') ?? '';
+    el.removeAttribute('data-we-keep');
+    const sz = el.getAttribute('data-we-sz');
+    el.removeAttribute('data-we-sz');
+    if (sz && !el.textContent?.trim() && !el.querySelector('img')) el.style.fontSize = `${sz}pt`;
+    if (v.includes('n')) el.style.breakAfter = 'avoid';
+    else if (v.includes('x') && /^H[1-6]$/.test(el.tagName)) el.style.breakAfter = 'auto';
+    if (v.includes('l')) el.style.breakInside = 'avoid';
+  }
 }
 
 // ---------- Header/footer XML → HTML (đủ cho nội dung header thông thường) ----------
