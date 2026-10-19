@@ -10,6 +10,10 @@
  * Hiệu năng: đo toàn bộ trong MỘT lượt khi DOM chưa bị sửa, theo dõi độ dịch cộng dồn bằng số học
  * ("dịch ảo"), rồi ghi tất cả khoảng đẩy một lần và kiểm tra lại bằng vài lượt đọc theo lô. Cách cũ
  * xen kẽ đọc/ghi nên mỗi lần đẩy buộc trình duyệt dàn trang lại cả tài liệu (50 trang ≈ 550 ms).
+ *
+ * Tăng dần: khi biết khối cấp cao nhất bị sửa (`from`), giữ nguyên mọi khoảng đẩy đứng trước nó và chỉ
+ * chia lại từ khối đó trở xuống. Nếu chỉ sửa một khối mà tổng chiều cao tài liệu không đổi (gõ thêm
+ * một ký tự không xuống dòng) thì bố cục sau đó chắc chắn không đổi, bỏ qua hẳn.
  */
 
 export interface PageGeometry {
@@ -35,13 +39,23 @@ interface Push {
   /** Khoảng đẩy hiện tại (px): margin-top mới, hoặc chiều cao hàng đệm. */
   amount: number;
   row?: { table: HTMLTableElement; head: HTMLTableRowElement[] };
-  /** Hàng đệm đã chèn (chỉ với hàng bảng). */
+  /** Ô của hàng đệm đã chèn (chỉ với hàng bảng). */
   gap?: HTMLElement;
+  /** Mã thuộc tính `data-we-pb` (chỉ với đẩy bằng margin). */
+  id?: string;
+  /** Hàng đệm + bản sao hàng tiêu đề đã chèn, để gỡ khi chia lại. */
+  nodes?: HTMLElement[];
 }
 
 export class Paginator {
-  private rules: string[] = [];
+  private rules = new Map<string, string>();
   private seq = 0;
+  /** Các lần đẩy đang có hiệu lực, theo thứ tự tài liệu. */
+  private pushes: Push[] = [];
+  private valid = false;
+  private geo = '';
+  private height = 0;
+  private pages = 1;
 
   constructor(
     private readonly body: HTMLElement,
@@ -53,14 +67,37 @@ export class Paginator {
   clear() {
     for (const el of Array.from(this.body.querySelectorAll(`[${ATTR}]`))) el.removeAttribute(ATTR);
     for (const el of Array.from(this.body.querySelectorAll(`.${SPACER}`))) el.remove();
-    this.rules = [];
+    this.rules.clear();
+    this.pushes = [];
+    this.valid = false;
     this.seq = 0;
     this.sheet.textContent = '';
   }
 
-  /** Chạy lại toàn bộ; trả về số trang. `scale` là hệ số zoom (transform) đang áp dụng. */
-  run(g: PageGeometry, scale: number): number {
-    this.clear();
+  /** Chiều cao tài liệu đã đổi so với lần chia trang gần nhất (vd: ảnh vừa tải xong). */
+  isStale(scale: number): boolean {
+    return !this.valid || Math.abs(this.body.getBoundingClientRect().height / scale - this.height) > 0.5;
+  }
+
+  /**
+   * Chia trang; trả về số trang. `scale` là hệ số zoom (transform) đang áp dụng.
+   * `from`: khối cấp cao nhất sớm nhất bị sửa (phía trước nó không đổi); bỏ trống = chia lại toàn bộ.
+   * `single`: chỉ đúng một khối bị sửa và không thêm/bớt khối nào, cho phép bỏ qua khi chiều cao không đổi.
+   */
+  run(g: PageGeometry, scale: number, from?: Element | null, single = false): number {
+    const geo = `${g.stride}|${g.avail}`;
+    const inc = !!from && this.valid && geo === this.geo && from.parentElement === this.body;
+    if (inc && single && Math.abs(this.body.getBoundingClientRect().height / scale - this.height) < 0.01) return this.pages;
+
+    let start: Element | null = null;
+    if (inc) {
+      // Lùi một khối (margin gộp với khối trước; ngắt trang cưỡng bức đứng trước khối bị sửa).
+      start = from!.previousElementSibling ?? from!;
+      while (start.classList.contains('we-page-break') && start.previousElementSibling) start = start.previousElementSibling;
+      this.drop(start);
+    } else this.clear();
+    this.geo = geo;
+
     const origin = this.body.getBoundingClientRect().top; // lượt dàn trang đầu tiên
     const pushes: Push[] = [];
     const headHeight = new Map<HTMLTableElement, number>();
@@ -96,8 +133,10 @@ export class Paginator {
       shift += delta;
     };
 
-    const visit = (container: Element) => {
-      for (const el of Array.from(container.children) as HTMLElement[]) {
+    const visit = (container: Element, startAt: Element | null = null) => {
+      let list = Array.from(container.children) as HTMLElement[];
+      if (startAt) list = list.slice(list.indexOf(startAt as HTMLElement));
+      for (const el of list) {
         if (el.offsetParent === null && el.tagName !== 'TR') continue; // display:none
         if (el.classList.contains(SPACER) || SKIP.has(el.tagName)) continue;
         if (el.classList.contains('we-page-break')) {
@@ -136,12 +175,31 @@ export class Paginator {
       }
     };
 
-    visit(this.body);
+    visit(this.body, start);
     this.apply(pushes);
-    this.verify(pushes, origin, scale);
+    this.verify(pushes, scale);
+    this.pushes.push(...pushes);
 
     const height = this.body.scrollHeight;
-    return Math.max(1, Math.floor((height - EPS) / g.stride) + 1);
+    this.height = this.body.getBoundingClientRect().height / scale;
+    this.valid = true;
+    return (this.pages = Math.max(1, Math.floor((height - EPS) / g.stride) + 1));
+  }
+
+  /** Gỡ mọi lần đẩy của `start` và các khối đứng sau nó (giữ những lần đẩy phía trước). */
+  private drop(start: Element) {
+    const after = (el: Element) => el === start || start.contains(el) || !!(start.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING);
+    let n = this.pushes.length;
+    while (n > 0 && after(this.pushes[n - 1].el)) {
+      const p = this.pushes[--n];
+      if (p.row) for (const node of p.nodes ?? []) node.remove();
+      else {
+        p.el.removeAttribute(ATTR);
+        if (p.id) this.rules.delete(p.id);
+      }
+    }
+    this.pushes.length = n;
+    this.sheet.textContent = [...this.rules.values()].join('\n');
   }
 
   /** Ghi toàn bộ khoảng đẩy vào DOM/CSS trong một lần. */
@@ -150,11 +208,12 @@ export class Paginator {
       if (p.row) this.insertGap(p);
       else {
         const id = String(++this.seq);
+        p.id = id;
         p.el.setAttribute(ATTR, id);
-        this.rules.push(this.rule(id, p.amount));
+        this.rules.set(id, this.rule(id, p.amount));
       }
     }
-    this.sheet.textContent = this.rules.join('\n');
+    this.sheet.textContent = [...this.rules.values()].join('\n');
   }
 
   private rule(id: string, amount: number) {
@@ -176,6 +235,7 @@ export class Paginator {
     gap.append(td);
     row.before(gap);
     p.gap = td;
+    p.nodes = [gap];
     for (const h of head) {
       const copy = h.cloneNode(true) as HTMLTableRowElement;
       copy.classList.add(SPACER, 'we-pb-head');
@@ -183,6 +243,7 @@ export class Paginator {
       copy.setAttribute('aria-hidden', 'true');
       copy.removeAttribute(ATTR);
       row.before(copy);
+      p.nodes.push(copy);
     }
   }
 
@@ -190,10 +251,13 @@ export class Paginator {
    * Kiểm tra vị trí thực tế so với dự kiến (margin gộp có thể làm lệch), chỉnh lại và đọc lại.
    * Mỗi vòng chỉ tốn một lần dàn trang vì mọi lần đọc diễn ra sau khi đã ghi hết.
    */
-  private verify(pushes: Push[], origin: number, scale: number) {
-    for (let round = 0; round < 4 && pushes.length; round++) {
+  private verify(pushes: Push[], scale: number) {
+    for (let round = 0; round < 8 && pushes.length; round++) {
       let drift = 0;
       let changed = false;
+      // Đọc lại gốc toạ độ mỗi vòng: cuộn của vùng chứa có thể đã đổi từ lúc đo ban đầu (trình duyệt tự
+      // neo cuộn khi nội dung phía trên đổi chiều cao), nếu dùng gốc cũ thì mọi vị trí lệch cùng một đoạn.
+      const origin = this.body.getBoundingClientRect().top;
       for (let i = 0; i < pushes.length; i++) {
         const p = pushes[i];
         const actual = (p.el.getBoundingClientRect().top - origin) / scale;
@@ -204,19 +268,12 @@ export class Paginator {
         if (Math.abs(fix) <= 0.02) continue; // rất chặt: sai số từng lần đẩy sẽ cộng dồn xuống các trang sau
         p.amount = Math.max(0, p.amount - fix);
         if (p.gap) p.gap.style.height = `${p.amount}px`;
-        else this.rules[this.indexOfPush(pushes, i)] = this.rule(p.el.getAttribute(ATTR)!, p.amount);
+        else this.rules.set(p.id!, this.rule(p.id!, p.amount));
         changed = true;
       }
       if (!changed) return;
-      this.sheet.textContent = this.rules.join('\n');
+      this.sheet.textContent = [...this.rules.values()].join('\n');
     }
-  }
-
-  /** Vị trí rule của lần đẩy thứ i = số lần đẩy kiểu margin đứng trước nó. */
-  private indexOfPush(pushes: Push[], i: number) {
-    let n = 0;
-    for (let k = 0; k < i; k++) if (!pushes[k].row) n++;
-    return n;
   }
 }
 

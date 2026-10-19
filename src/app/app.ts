@@ -1,4 +1,4 @@
-import { Component, computed, signal } from '@angular/core';
+import { Component, computed, signal, viewChild } from '@angular/core';
 
 import { WordDocument } from './word-editor/core/engine';
 import { DocxSource, WordEditor, WordEmitKind } from './word-editor/word-editor';
@@ -13,6 +13,7 @@ type OutputKind = 'html' | 'htmlBase64' | 'docxBase64' | 'document';
   styleUrl: './app.css',
 })
 export class App {
+  private readonly editor = viewChild.required(WordEditor);
   protected readonly html = signal('<p>Xin chào! Mở file .docx bằng nút bên phải hoặc tab <b>Tệp</b>.</p>');
   protected readonly docx = signal<DocxSource | null>(null);
   protected readonly readonly = signal(false);
@@ -69,6 +70,11 @@ export class App {
     const file = input.files?.[0];
     input.value = '';
     if (file) this.docx.set(file); // truyền qua input [docx]
+  }
+
+  /** Chế độ manual: chỉ tạo html / base64 / .docx khi bấm nút, để gõ không bị giật. */
+  protected fetchOutput() {
+    return this.editor().emitNow();
   }
 
   protected async copy() {

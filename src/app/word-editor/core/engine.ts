@@ -117,7 +117,15 @@ export class WordEngine {
   private currentPage = 1;
   private savedRange: Range | null = null;
   private layoutQueued = false;
+  private sizeKey = '';
+  /** Khối cấp cao nhất bị sửa kể từ lần dàn trang trước; `dirtyAll` = không biết chỗ nào, dàn lại toàn bộ. */
+  private dirtyBlocks = new Set<Element>();
+  private dirtyAll = false;
+  private dirtyStructure = false;
   private commitTimer = 0;
+  private countTimer = 0;
+  private words = 0;
+  private chars = 0;
   private changeTimer = 0;
   private hf: { kind: HFKind; first: boolean; el: HTMLElement } | null = null;
   private image: HTMLImageElement | null = null;
@@ -167,7 +175,7 @@ export class WordEngine {
       `::highlight(${this.id}-all) { background: #fff176; color: inherit; }` +
       `::highlight(${this.id}-cur) { background: #ff9800; color: #000; }`;
 
-    this.observer = new MutationObserver(() => this.onMutate());
+    this.observer = new MutationObserver(records => this.onMutate(records));
     this.observer.observe(this.body, {
       subtree: true,
       childList: true,
@@ -175,7 +183,15 @@ export class WordEngine {
       attributes: true,
       attributeFilter: ['style', 'src', 'colspan', 'rowspan', 'href', 'start', 'width', 'height'],
     });
-    this.resizeObserver = new ResizeObserver(() => this.scheduleLayout());
+    this.resizeObserver = new ResizeObserver(() => {
+      // Đổi bề rộng → dàn lại toàn bộ. Chỉ đổi chiều cao (ảnh vừa tải xong…) thì chỉ dàn lại nếu khác lần chia trang gần nhất;
+      // chiều cao đổi do chính việc gõ/chia trang thì đã có lượt dàn trang lo.
+      const key = `${this.body.offsetWidth}|${this.host.clientWidth}`;
+      if (key !== this.sizeKey) {
+        this.sizeKey = key;
+        this.scheduleLayout();
+      } else if (!this.layoutQueued && this.view === 'print' && this.paginator.isStale(this.zoom)) this.scheduleLayout();
+    });
     this.resizeObserver.observe(this.body);
     this.resizeObserver.observe(host);
 
@@ -186,6 +202,7 @@ export class WordEngine {
   }
 
   destroy() {
+    clearTimeout(this.countTimer);
     this.observer.disconnect();
     this.resizeObserver.disconnect();
     this.finder.clear();
@@ -310,6 +327,24 @@ export class WordEngine {
 
   setGridlines(on: boolean) {
     this.host.classList.toggle('we-gridlines', on);
+  }
+
+  /** Đặt con trỏ ở đầu tài liệu, cuộn lên đầu và focus (dùng sau khi mở file để gõ được ngay). */
+  focusStart() {
+    this.exitHeaderFooter();
+    const r = document.createRange();
+    r.setStart(this.body, 0);
+    r.collapse(true);
+    const first = document.createTreeWalker(this.body, NodeFilter.SHOW_TEXT).nextNode();
+    if (first) r.setStart(first, 0);
+    r.collapse(true);
+    this.body.focus({ preventScroll: true });
+    const sel = getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(r);
+    this.savedRange = r.cloneRange();
+    this.host.scrollTop = 0;
+    this.host.scrollLeft = 0;
   }
 
   focus() {
@@ -650,6 +685,7 @@ export class WordEngine {
     this.exitHeaderFooter();
     const wasWeb = this.view === 'web';
     if (wasWeb) this.setView('print');
+    this.dirtyAll = true;
     this.layoutNow();
     const p = this.doc.page;
     const stride = p.height + GAP;
@@ -820,7 +856,37 @@ export class WordEngine {
     });
   }
 
-  private scheduleLayout() {
+  /** Khối cấp cao nhất chứa bản ghi thay đổi; null nếu không xác định được (phải dàn lại toàn bộ). */
+  private blockOf(r: MutationRecord): Element | null {
+    if (r.target === this.body) {
+      // Thêm/bớt khối: bắt đầu dàn lại từ khối đứng trước chỗ thay đổi.
+      this.dirtyStructure = true;
+      let c: Node | null = r.previousSibling;
+      while (c && c.nodeType !== 1) c = c.previousSibling;
+      return c as Element | null;
+    }
+    let n: Node | null = r.target;
+    while (n && n.parentNode !== this.body) n = n.parentNode;
+    return n as Element | null;
+  }
+
+  /** Ghi nhận khối bị sửa từ các bản ghi; false nếu không có gì ảnh hưởng bố cục. */
+  private markDirty(records: MutationRecord[]): boolean {
+    let any = false;
+    for (const r of records) {
+      if (!this.body.contains(r.target)) continue; // nút đã bị gỡ khỏi tài liệu
+      any = true;
+      const b = this.blockOf(r);
+      if (b) this.dirtyBlocks.add(b);
+      else this.dirtyAll = true;
+    }
+    return any;
+  }
+
+  /** `records`: các thay đổi nội dung đã biết chỗ (gõ phím); bỏ trống = không biết, dàn lại toàn bộ. */
+  private scheduleLayout(records?: MutationRecord[]) {
+    if (records && !this.markDirty(records)) return;
+    if (!records) this.dirtyAll = true;
     if (this.layoutQueued) return;
     this.layoutQueued = true;
     const run = () => {
@@ -835,13 +901,25 @@ export class WordEngine {
 
   private layoutNow() {
     const p = this.doc.page;
+    this.markDirty(this.observer.takeRecords()); // bản ghi chưa kịp giao cho onMutate
     if (this.view === 'print') {
       const before = this.pageCount;
-      this.observer.takeRecords();
-      this.pageCount = this.paginator.run({ stride: p.height + GAP, avail: p.height - p.marginTop - p.marginBottom }, this.zoom);
+      let from: Element | null = null;
+      if (!this.dirtyAll && this.dirtyBlocks.size) {
+        // Khối đứng sớm nhất trong tài liệu; khối nào đã bị gỡ thì không còn mốc để giữ lại phía trước.
+        const blocks = [...this.dirtyBlocks];
+        if (blocks.every(b => b.parentNode === this.body))
+          from = blocks.reduce((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_PRECEDING ? b : a));
+      }
+      const single = this.dirtyBlocks.size === 1 && !this.dirtyStructure && !this.dirtyAll;
+      this.dirtyBlocks.clear();
+      this.dirtyAll = this.dirtyStructure = false;
+      this.pageCount = this.paginator.run({ stride: p.height + GAP, avail: p.height - p.marginTop - p.marginBottom }, this.zoom, from, single);
       this.observer.takeRecords();
       this.renderPages(before !== this.pageCount && /data-we-field="pages"/.test(this.doc.header + this.doc.footer + this.doc.firstHeader + this.doc.firstFooter));
     } else {
+      this.dirtyBlocks.clear();
+      this.dirtyAll = this.dirtyStructure = false;
       this.pageCount = 1;
     }
     this.updateSizer();
@@ -861,15 +939,23 @@ export class WordEngine {
   }
 
   private emitLayout() {
-    let words = 0;
-    let chars = 0;
-    const walker = document.createTreeWalker(this.body, NodeFilter.SHOW_TEXT);
-    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
-      const t = (n as Text).data;
-      chars += t.replace(/\s/g, '').length;
-      words += t.split(/\s+/).filter(Boolean).length;
-    }
-    this.listener.layout?.({ pages: this.pageCount, currentPage: this.currentPage, words, chars });
+    // Đếm từ phải duyệt mọi nút chữ nên chỉ làm sau khi ngừng gõ; số trang / trang hiện tại báo ngay.
+    this.listener.layout?.({ pages: this.pageCount, currentPage: this.currentPage, words: this.words, chars: this.chars });
+    clearTimeout(this.countTimer);
+    this.countTimer = window.setTimeout(() => {
+      let words = 0;
+      let chars = 0;
+      const walker = document.createTreeWalker(this.body, NodeFilter.SHOW_TEXT);
+      for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+        const t = (n as Text).data;
+        chars += t.replace(/\s/g, '').length;
+        words += t.split(/\s+/).filter(Boolean).length;
+      }
+      if (words === this.words && chars === this.chars) return;
+      this.words = words;
+      this.chars = chars;
+      this.listener.layout?.({ pages: this.pageCount, currentPage: this.currentPage, words, chars });
+    }, 250);
   }
 
   private emitState() {
@@ -1218,11 +1304,15 @@ export class WordEngine {
 
   private flushHistory() {
     clearTimeout(this.commitTimer);
-    if (this.observer.takeRecords().length) this.history.markDirty();
+    const taken = this.observer.takeRecords();
+    if (taken.length) {
+      this.history.markDirty();
+      this.scheduleLayout(taken); // bản ghi đã lấy ra thì onMutate không còn nhận được
+    }
     this.history.commit();
   }
 
-  private onMutate() {
+  private onMutate(records: MutationRecord[]) {
     if (this.hf) {
       this.saveHeaderFooter();
       this.renderPages();
@@ -1243,7 +1333,7 @@ export class WordEngine {
         sel?.addRange(r);
       }
     }
-    this.scheduleLayout();
+    this.scheduleLayout(records);
     this.emitChange();
   }
 

@@ -766,7 +766,7 @@
 }
 
 @if (busy(); as message) {
-  <div class="we-busy" role="status">{{ message }}</div>
+  <div class="we-busy" role="status" aria-live="polite"><span class="we-spinner" aria-hidden="true"></span>{{ message }}</div>
 }
 @if (toast(); as message) {
   <div class="we-toast" role="alert">{{ message }}</div>

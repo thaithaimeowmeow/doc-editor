@@ -71,6 +71,7 @@ Ctrl+Shift+L (danh sách), Ctrl+Shift+C (sao chép định dạng), Ctrl+Space (
 | `emit` | `('html' \| 'htmlBase64' \| 'docxBase64' \| 'document')[]` | Những output được phát. Mặc định `['html']` |
 | `debounce` | `number` (ms) | Chờ sau lần sửa cuối rồi mới phát html / htmlBase64 / document. Mặc định 300 |
 | `docxDebounce` | `number` (ms) | Chờ rồi mới tạo và phát docxBase64. Mặc định 1500. Nếu đang tạo mà người dùng sửa tiếp thì bỏ kết quả cũ |
+| `emitMode` | `'auto' \| 'manual'` | `auto` (mặc định): tự phát sau mỗi lần sửa. `manual`: không phát gì cho đến khi gọi `emitNow()`; nên dùng với tài liệu lớn hoặc khi bật `docxBase64`. Ở chế độ này `[(html)]` / formControl cũng chỉ cập nhật khi gọi `emitNow()`. |
 | `saveMode` | `'download' \| 'emit'` | Ctrl+S / nút Lưu: tải .docx, hoặc chỉ phát `save` |
 | `showRuler` | `boolean` | Hiện thước kẻ |
 
@@ -100,6 +101,7 @@ const ed = this.editor(); // viewChild.required(WordEditor)
 ed.getHtml();                 // HTML thân văn bản (đã sanitize)
 ed.setHtml('<p>…</p>');
 await ed.getHtmlBase64();     // base64 UTF-8 của HTML
+await ed.emitNow();           // phát ngay các output trong [emit] (hiện thanh "Đang xuất dữ liệu…")
 await ed.getDocxBase64();     // base64 của .docx (không có tiền tố data:)
 await ed.getDocxBlob();
 await ed.downloadDocx();
@@ -175,7 +177,19 @@ Các phụ thuộc gián tiếp đều là MIT, ISC, 0BSD hoặc Zlib.
 - **Undo:** số snapshot tự giảm theo kích thước tài liệu (tài liệu 50 trang giữ khoảng 100 bước, khoảng 120 MB) thay vì cố định 200 bước (khoảng 230 MB).
 - Bỏ qua `<colgroup>` khi chia trang (hộp của nó trùng cả bảng nên bị coi là một khối cần đẩy).
 
-Chưa làm: chia trang tăng dần từ vị trí vừa sửa. Hiện mỗi lần gõ chia lại cả tài liệu, tỉ lệ thuận với số khối (tài liệu vài trăm trang sẽ thấy trễ khi gõ).
+- **Chia trang tăng dần:** engine ghi nhận khối cấp cao nhất bị sửa; các khoảng đẩy phía trước khối đó được giữ nguyên, chỉ chia lại từ đó trở xuống. Nếu chỉ sửa một khối và tổng chiều cao không đổi (gõ thêm chữ không xuống dòng) thì bỏ qua hẳn. Mọi thay đổi không rõ vị trí (đổi khổ giấy, zoom, đổi chế độ xem, đổi độ rộng, lệnh định dạng) vẫn chia lại toàn bộ.
+- **Đếm từ** chạy sau khi ngừng gõ 250 ms thay vì mỗi lần dàn trang.
+- **Sửa lỗi chia trang bùng nổ:** khi cuộn giữa tài liệu rồi sửa, trình duyệt tự neo cuộn làm gốc toạ độ cũ bị lệch, bước kiểm tra đẩy khối đi hàng chục nghìn px (số trang nhảy 51 → 84 → 165). Nay đọc lại gốc toạ độ mỗi vòng kiểm tra và tắt `overflow-anchor` trên vùng cuộn.
+
+| Tài liệu tổng hợp 176 trang (SRS × 6, 33 nghìn node) | Trước | Sau |
+|---|---|---|
+| Gõ một ký tự không xuống dòng | 450–560 ms | **khoảng 16 ms** (một khung hình) |
+| Gõ làm đoạn dài thêm một dòng, ở trang 90 | khoảng 450 ms | khoảng 450–550 ms (chia lại từ chỗ sửa trở xuống) |
+| Như trên, ở cuối tài liệu | khoảng 450 ms | **50–100 ms** |
+
+Tài liệu dưới khoảng 60 trang luôn nằm trong một khung hình (16 ms) cả hai trường hợp.
+
+Chưa làm: dừng sớm khi bố cục phía sau không đổi sau một lần sửa làm đổi chiều cao (cần biết vị trí cũ của từng khoảng đẩy).
 
 ## Giới hạn đã biết
 

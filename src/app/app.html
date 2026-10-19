@@ -5,6 +5,7 @@
     [docx]="docx()"
     [readonly]="readonly()"
     [emit]="emit"
+    emitMode="manual"
     [debounce]="300"
     [docxDebounce]="1500"
     (htmlChange)="count('html')"
@@ -35,7 +36,8 @@
       </div>
     </header>
 
-    <textarea class="output" readonly [value]="output()" placeholder="Chưa có dữ liệu – hãy gõ vào tài liệu"></textarea>
+    <button type="button" class="fetch" (click)="fetchOutput()">Lấy dữ liệu ra</button>
+    <textarea class="output" readonly [value]="output()" placeholder="Chưa có dữ liệu – bấm “Lấy dữ liệu ra”"></textarea>
 
     <footer class="panel-foot">
       <span>{{ size(output()) }} · số lần phát: {{ counts()[kind()] }}</span>

@@ -87,6 +87,12 @@ export class WordEditor implements ControlValueAccessor {
   // ---------- Dữ liệu ra (debounce) ----------
   /** Những output nào được phát. Tạo .docx tốn CPU nên chỉ bật khi cần. */
   readonly emit = input<WordEmitKind[]>(['html']);
+  /**
+   * 'auto': tự phát sau mỗi lần sửa (debounce). 'manual': không phát gì cho đến khi gọi `emitNow()`,
+   * tránh tốn CPU khi gõ trên tài liệu lớn (tạo .docx 170–570 ms, lấy HTML 12 MB khoảng 45 ms).
+   * Ở chế độ 'manual', `[(html)]` / formControl cũng chỉ cập nhật khi gọi `emitNow()`.
+   */
+  readonly emitMode = input<'auto' | 'manual'>('auto');
   /** ms chờ sau lần sửa cuối trước khi phát html / htmlBase64 / document. */
   readonly debounce = input(300);
   /** ms chờ sau lần sửa cuối trước khi tạo và phát docxBase64. */
@@ -333,6 +339,7 @@ export class WordEditor implements ControlValueAccessor {
   /** Mở .docx, .html hoặc .txt. */
   async loadFile(file: File | Blob, name = file instanceof File ? file.name : 'document.docx') {
     await this.ready;
+    if (this.tab() === 'file') this.tab.set('home'); // đóng màn hình Tệp để thấy ngay vùng soạn thảo
     await this.run('Đang mở tài liệu…', async () => {
       const lower = name.toLowerCase();
       const title = name.replace(/\.(docx|html?|txt)$/i, '');
@@ -348,6 +355,8 @@ export class WordEditor implements ControlValueAccessor {
         this.engine!.setDocument({ html, header: '', footer: '', firstHeader: '', firstFooter: '', differentFirstPage: false, title });
       }
       this.syncFromEngine();
+      await nextFrame(); // chờ màn hình Tệp gỡ khỏi DOM rồi mới focus
+      this.engine!.focusStart();
       this.fileLoaded.emit(name);
     });
   }
@@ -706,6 +715,7 @@ export class WordEditor implements ControlValueAccessor {
 
   /** Gom các thay đổi liên tiếp, chỉ phát sau khi người dùng ngừng sửa `debounce` ms. */
   private scheduleEmit() {
+    if (this.emitMode() === 'manual') return;
     clearTimeout(this.emitTimer);
     this.emitTimer = window.setTimeout(() => void this.flushEmit(), this.debounce());
     if (this.emit().includes('docxBase64')) {
@@ -714,13 +724,23 @@ export class WordEditor implements ControlValueAccessor {
     }
   }
 
-  private async flushEmit() {
+  /** Phát ngay các output trong `emit` (hoặc `kinds`), kể cả khi `emitMode` là 'manual'. Hiện thanh tiến trình khi đang tạo. */
+  async emitNow(kinds: WordEmitKind[] = this.emit()) {
+    await this.ready;
+    clearTimeout(this.emitTimer);
+    clearTimeout(this.docxTimer);
+    await this.run('Đang xuất dữ liệu…', async () => {
+      await this.flushEmit(kinds, true);
+      if (kinds.includes('docxBase64')) this.docxBase64Change.emit(await this.getDocxBase64());
+    });
+  }
+
+  private async flushEmit(kinds: WordEmitKind[] = this.emit(), force = false) {
     if (!this.engine) return;
     const html = this.engine.getHtml();
-    const changed = html !== this.lastHtml;
+    const changed = force || html !== this.lastHtml;
     this.lastHtml = html;
     if (changed) this.onChange(html);
-    const kinds = this.emit();
     if (kinds.includes('html') && changed) this.htmlChange.emit(html);
     if (kinds.includes('document')) this.documentChange.emit(this.engine.getDocument());
     if (kinds.includes('htmlBase64') && changed) this.htmlBase64Change.emit(await textToBase64(html));
@@ -759,6 +779,7 @@ export class WordEditor implements ControlValueAccessor {
   private async run<T>(message: string, task: () => Promise<T>): Promise<T | undefined> {
     this.busy.set(message);
     try {
+      await nextFrame(); // để thanh "đang xử lý" kịp vẽ trước khi main thread bị chiếm
       return await task();
     } catch (err) {
       console.error(err);
@@ -804,4 +825,13 @@ function toDocxBlob(src: DocxSource): Blob {
   if (src instanceof Blob) return src;
   if (typeof src === 'string') return base64ToBlob(src.replace(/^data:[^,]*,/, ''), DOCX_MIME);
   return new Blob([src as BlobPart], { type: DOCX_MIME });
+}
+
+/** Chờ trình duyệt vẽ một khung hình (có hạn chờ vì rAF bị dừng khi tab không hiển thị). */
+function nextFrame(): Promise<void> {
+  return new Promise(resolve => {
+    const done = () => resolve();
+    requestAnimationFrame(() => setTimeout(done, 0));
+    setTimeout(done, 80);
+  });
 }
